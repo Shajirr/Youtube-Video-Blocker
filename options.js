@@ -3,14 +3,17 @@ class OptionsManager {
   constructor() {
     this.elements = {
       blockingRules: document.getElementById('blockingRules'),
-      showPlaceholders: document.getElementById('showPlaceholders'),	
+      blockedVideoIds: document.getElementById('blockedVideoIds'),
+      showPlaceholders: document.getElementById('showPlaceholders'),
       saveBtn: document.getElementById('saveBtn'),
       testBtn: document.getElementById('testBtn'),
-      clearBtn: document.getElementById('clearBtn'),
+      resetBtn: document.getElementById('resetBtn'),
       statusMessage: document.getElementById('statusMessage'),
       ruleCount: document.getElementById('ruleCount'),
       blockedCount: document.getElementById('blockedCount'),
-      themeToggle: document.getElementById('themeToggle')
+      themeToggle: document.getElementById('themeToggle'),
+      tabs: document.querySelectorAll('.tab'),
+      tabContents: document.querySelectorAll('.tab-content')
     };
     
     this.init();
@@ -25,10 +28,14 @@ class OptionsManager {
 
   async loadSettings() {
     try {
-      const result = await chrome.storage.sync.get(['blockingRules', 'blockedVideosCount', 'theme', 'showPlaceholders']);
+      const result = await chrome.storage.sync.get(['blockingRules', 'blockedVideoIds', 'blockedVideosCount', 'theme', 'showPlaceholders']);
       
       if (result.blockingRules) {
         this.elements.blockingRules.value = result.blockingRules.join('\n');
+      }
+      
+      if (result.blockedVideoIds) {
+        this.elements.blockedVideoIds.value = result.blockedVideoIds.map(entry => `${entry.id}: ${entry.title}`).join('\n');
       }
       
       if (result.blockedVideosCount) {
@@ -52,9 +59,10 @@ class OptionsManager {
   setupEventListeners() {
     this.elements.saveBtn.addEventListener('click', () => this.saveRules());
     this.elements.testBtn.addEventListener('click', () => this.testRules());
-    this.elements.clearBtn.addEventListener('click', () => this.clearRules());
+    this.elements.resetBtn.addEventListener('click', () => this.resetCounters());
     this.elements.blockingRules.addEventListener('input', () => this.updateStats());
-	this.elements.showPlaceholders.addEventListener('change', () => this.saveShowPlaceholders());
+    this.elements.blockedVideoIds.addEventListener('input', () => this.updateStats());
+    this.elements.showPlaceholders.addEventListener('change', () => this.saveShowPlaceholders());
     this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
     
     // Auto-save on input (debounced)
@@ -62,6 +70,14 @@ class OptionsManager {
     this.elements.blockingRules.addEventListener('input', () => {
       clearTimeout(saveTimeout);
       saveTimeout = setTimeout(() => this.saveRules(true), 2000);
+    });
+    this.elements.blockedVideoIds.addEventListener('input', () => {
+      clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(() => this.saveRules(true), 2000);
+    });
+    
+    this.elements.tabs.forEach(tab => {
+      tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
     });
   }
 
@@ -104,25 +120,49 @@ class OptionsManager {
       .map(rule => rule.trim())
       .filter(rule => rule.length > 0);
   }
-
+  
+  parseBlockedVideoIds(text) {
+    return text
+      .split('\n')
+      .map(line => {
+        const [id, ...titleParts] = line.split(':').map(part => part.trim());
+        if (id && id.match(/^[a-zA-Z0-9_-]{11}$/)) {
+          return { id, title: titleParts.join(':') || 'Unknown Title' };
+        }
+        return null;
+      })
+      .filter(entry => entry);
+  }
   updateStats() {
     const rules = this.parseRules(this.elements.blockingRules.value);
-    this.elements.ruleCount.textContent = rules.length;
+    const blockedVideoIds = this.elements.blockedVideoIds.value
+      .split('\n')
+      .map(line => line.split(':')[0].trim())
+      .filter(id => id && id.match(/^[a-zA-Z0-9_-]{11}$/));
+    this.elements.ruleCount.textContent = rules.length + blockedVideoIds.length;
   }
 
-  async saveRules(silent = false) {
-    const rulesText = this.elements.blockingRules.value;
-    const rules = this.parseRules(rulesText);
-    
+  async saveRules(autoSave = false) {
     try {
-      await chrome.storage.sync.set({ blockingRules: rules });
-      
-      if (!silent) {
-        this.showStatus(`Saved ${rules.length} blocking rules`, 'success');
-      }
+      const rules = this.parseRules(this.elements.blockingRules.value);
+      const blockedVideoIds = this.elements.blockedVideoIds.value
+        .split('\n')
+        .map(line => {
+          const [id, ...titleParts] = line.split(':').map(part => part.trim());
+          if (id && id.match(/^[a-zA-Z0-9_-]{11}$/)) {
+            return { id, title: titleParts.join(':') || 'Unknown Title' };
+          }
+          return null;
+        })
+        .filter(entry => entry);
+
+      await chrome.storage.sync.set({
+        blockingRules: rules,
+        blockedVideoIds
+      });
       
       this.updateStats();
-      
+      this.showStatus(autoSave ? 'Rules auto-saved' : 'Rules saved successfully', 'success');
     } catch (error) {
       console.error('Error saving rules:', error);
       this.showStatus('Error saving rules', 'error');
@@ -183,20 +223,14 @@ class OptionsManager {
     }
   }
 
-  async clearRules() {
-    if (!confirm('Are you sure you want to clear all blocking rules?')) {
-      return;
-    }
-    
-    this.elements.blockingRules.value = '';
-    
+  async resetCounters() {
     try {
-      await chrome.storage.sync.set({ blockingRules: [] });
-      this.showStatus('All rules cleared', 'success');
-      this.updateStats();
+      await chrome.storage.sync.set({ blockedVideosCount: 0 });
+      this.elements.blockedCount.textContent = 0;
+      this.showStatus('Counters reset successfully', 'success');
     } catch (error) {
-      console.error('Error clearing rules:', error);
-      this.showStatus('Error clearing rules', 'error');
+      console.error('Error resetting counters:', error);
+      this.showStatus('Error resetting counters', 'error');
     }
   }
 
@@ -209,6 +243,15 @@ class OptionsManager {
     setTimeout(() => {
       statusEl.style.display = 'none';
     }, 3000);
+  }
+  
+  switchTab(tabName) {
+    this.elements.tabs.forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+    this.elements.tabContents.forEach(content => {
+      content.classList.toggle('active', content.id === `${tabName}-tab`);
+    });
   }
 }
 

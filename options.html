@@ -129,15 +129,16 @@
 
         .textarea {
             width: 100%;
-            min-height: 200px;
+            min-height: 150px;
             padding: 0.75rem;
-            border: 2px solid var(--border-color);
-            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
             font-family: 'Consolas', 'Monaco', monospace;
             font-size: 0.9rem;
+            resize: vertical;
             background: var(--bg-primary);
             color: var(--text-primary);
-            resize: vertical;
+                             
             transition: border-color 0.3s ease;
         }
 
@@ -147,26 +148,75 @@
         }
 
         .help-text {
-            font-size: 0.875rem;
+            font-size: 0.85rem;
             color: var(--text-secondary);
             margin-top: 0.5rem;
             line-height: 1.4;
         }
 
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .tab {
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-weight: 500;
+            transition: background-color 0.3s ease;
+        }
+
+        .tab.active {
+            background: var(--accent-color);
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .stats {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--accent-color);
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
         .button-group {
             display: flex;
             gap: 1rem;
-            margin-top: 1.5rem;
+            flex-wrap: wrap;
         }
 
         .btn {
-            padding: 0.75rem 1.5rem;
+            padding: 0.5rem 1rem;
             border: none;
-            border-radius: 6px;
+            border-radius: 4px;
             font-size: 0.9rem;
             font-weight: 500;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: background-color 0.3s ease;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -272,6 +322,7 @@
         }
 
         .example-title {
+            font-size: 1rem;
             font-weight: 600;
             margin-bottom: 0.5rem;
             color: var(--text-primary);
@@ -297,19 +348,41 @@
         </header>
 
         <div class="section">
-            <div class="section-title">Blocking Rules</div>
-            <div class="form-group">
-                <label for="blockingRules">Enter blocking rules (one per line):</label>
-                <textarea 
-                    id="blockingRules" 
-                    class="textarea" 
-                    placeholder="Enter keywords or phrases to block videos containing them in the title...&#10;&#10;Example:&#10;scam&#10;clickbait&#10;fake news&#10;conspiracy"
-                ></textarea>
-                <div class="help-text">
-                    • Each rule should be on a separate line<br>
-                    • Rules are case-insensitive<br>
-                    • Videos with titles containing any of these rules will be blocked<br>
-                    • Empty lines are ignored
+            <div class="section-title">Blocking Options</div>
+            <div class="tabs">
+                <div class="tab active" data-tab="title">Video Title</div>
+                <div class="tab" data-tab="id">Video ID</div>
+            </div>
+            <div class="tab-content active" id="title-tab">
+                <div class="form-group">
+                    <label for="blockingRules">Enter blocking rules (one per line):</label>
+                    <textarea 
+                        id="blockingRules" 
+                        class="textarea" 
+                        placeholder="Enter keywords or phrases to block videos containing them in the title...&#10;&#10;Example:&#10;scam&#10;clickbait&#10;fake news&#10;conspiracy"
+                    ></textarea>
+                    <div class="help-text">
+                        • Each rule should be on a separate line<br>
+                        • Rules are case-insensitive<br>
+                        • Videos with titles containing any of these rules will be blocked<br>
+                        • Empty lines are ignored
+                    </div>
+                </div>
+            </div>
+            <div class="tab-content" id="id-tab">
+                <div class="form-group">
+                    <label for="blockedVideoIds">Blocked Video IDs (ID: Title, one per line):</label>
+                    <textarea 
+                        id="blockedVideoIds" 
+                        class="textarea" 
+                        placeholder="Enter video IDs to block...&#10;&#10;Example:&#10;QNK-GQT9Jyo: My Video Title&#10;ABC123DEF45: Another Video"
+                    ></textarea>
+                    <div class="help-text">
+                        • Each line should be in the format: VideoID: Video Title<br>
+                        • Video IDs are 11 characters (e.g., QNK-GQT9Jyo)<br>
+                        • Titles are for reference only<br>
+                        • Empty lines are ignored
+                    </div>
                 </div>
             </div>
 
@@ -337,8 +410,8 @@
                 <button class="btn btn-secondary" id="testBtn">
                     🧪 Test Rules
                 </button>
-                <button class="btn btn-danger" id="clearBtn">
-                    🗑️ Clear All
+                <button class="btn btn-danger" id="resetBtn">
+                    🔄 Reset Counters
                 </button>
             </div>
 
@@ -348,8 +421,8 @@
         <div class="section">
             <div class="section-title">How It Works</div>
             <p style="margin-bottom: 1rem; color: var(--text-secondary);">
-                This extension blocks YouTube videos in the recommendations section based on title matching. 
-                When a video title contains any of your blocking rules, it will be hidden and replaced with a "Video Blocked" message.
+                This extension blocks YouTube videos in the recommendations section based on title or video ID matching. 
+                When a video title or ID matches your blocking rules, it will be hidden and replaced with a "Video Blocked" message.
             </p>
             
             <div class="example-section">
@@ -359,7 +432,8 @@ clickbait
 fake news
 conspiracy theory
 drama
-reaction</div>
+reaction
+QNK-GQT9Jyo: Example Video Title</div>
             </div>
         </div>
     </div>

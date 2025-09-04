@@ -12,8 +12,13 @@
   
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "contextMenus"
   ],
+  
+  "background": {
+    "scripts": ["background.js"]
+  },
   
   "host_permissions": [
     "*://*.youtube.com/*"

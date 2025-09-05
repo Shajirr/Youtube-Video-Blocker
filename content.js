@@ -22,34 +22,21 @@ constructor() {
   this.init();
 }
 
-init() {
-  this.lastProcessedChange = null;
-  this.loadSettings();
+async init() {
+  await this.loadSettings();
   this.setupMessageListener();
   this.setupContextMenu();
   this.startBlocking();
   
-  this.handleStorageChange = debounce((changes, namespace) => {
-    if (namespace !== 'sync') return;
-    console.log('YouTube Video Blocker: Storage change detected for instance:', this.instanceId);
-
-    // Skip if this instance made the change
-    if (changes.lastUpdateInstance && changes.lastUpdateInstance.newValue === this.instanceId) {
-      console.log('YouTube Video Blocker: Skipping self-triggered change for instance:', this.instanceId);
-      return;
-    }
-
-    if (changes.blockedVideoIds) {
-      this.blockedVideoIds = changes.blockedVideoIds.newValue || [];
-      console.log('YouTube Video Blocker: Blocked video IDs updated:', this.blockedVideoIds, 'by instance:', this.instanceId);
-      this.processVideos();
-    }
+  // Listen for storage changes (rules, placeholders, theme, video IDs)
+  const debouncedOnStorageChange = debounce((changes, namespace) => {
+    if (namespace === 'sync') {
       if (changes.blockingRules) {
         this.rules = changes.blockingRules.newValue || [];
         console.log('YouTube Video Blocker: Rules updated:', this.rules);
         this.processVideos();
       }
-      if (changes.blockedVideoIds) {
+      if (changes.blockedVideoIds && changes.lastUpdateInstance?.newValue !== this.instanceId) {
         this.blockedVideoIds = changes.blockedVideoIds.newValue || [];
         console.log('YouTube Video Blocker: Blocked video IDs updated:', this.blockedVideoIds);
         this.processVideos();
@@ -74,11 +61,10 @@ init() {
           this.processVideos();
         }
       }
-	  if (changes.lastUpdateInstance) {
-		this.lastProcessedChange = changes.lastUpdateInstance.newValue;
-	  }
-  }, 200);
-    chrome.storage.onChanged.addListener(this.handleStorageChange);
+    }
+  }, 100);
+
+  chrome.storage.onChanged.addListener(debouncedOnStorageChange);
 }
 
 async loadSettings() {
@@ -109,7 +95,7 @@ async loadSettings() {
 setupContextMenu() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'blockVideo' && message.url) {
-      console.log('YouTube Video Blocker: Received blockVideo message for URL:', message.url, 'instance:', this.instanceId);
+      console.log('YouTube Video Blocker: Received blockVideo message for URL:', message.url);
       const videoIdMatch = message.url.match(/v=([a-zA-Z0-9_-]{11})/);
       if (!videoIdMatch) {
         console.warn('YouTube Video Blocker: Invalid video ID in URL:', message.url);
@@ -127,7 +113,7 @@ setupContextMenu() {
       const linkElements = document.querySelectorAll(`a[href*="${message.url}"], a[href*="/watch?v=${videoId}"]`);
       let title = null;
       for (const link of linkElements) {
-        const parent = link.closest('yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-rich-item-renderer');
+        const parent = link.closest('yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer');
         if (parent) {
           const titleElement = parent.querySelector(
             '.yt-lockup-metadata-view-model__title span[role="text"], ' +
@@ -148,10 +134,18 @@ setupContextMenu() {
       this.blockedVideoIds.push({ id: videoId, title: title || 'Unknown Title' });
       chrome.storage.sync.set({ 
         blockedVideoIds: this.blockedVideoIds,
-        lastUpdateInstance: this.instanceId // Track which instance made the update
+        lastUpdateInstance: this.instanceId
       }, () => {
-        console.log('YouTube Video Blocker: Blocked video:', { id: videoId, title: title || 'Unknown Title' }, 'instance:', this.instanceId);
-        this.processVideos({ targetVideoId: videoId }); // Process specific video ID
+        console.log('YouTube Video Blocker: Blocked video:', { id: videoId, title: title || 'Unknown Title' });
+        // Process immediately and retry if needed
+        const attemptProcess = (attempt = 1, maxAttempts = 5) => {
+          const processed = this.processVideos({ targetVideoId: videoId, force: true });
+          if (!processed && attempt < maxAttempts) {
+            console.log(`YouTube Video Blocker: Video ID ${videoId} not found, retrying (${attempt}/${maxAttempts})`);
+            requestAnimationFrame(() => attemptProcess(attempt + 1, maxAttempts));
+          }
+        };
+        attemptProcess();
         sendResponse({ success: true, id: videoId, title: title || 'Unknown Title' });
       });
 
@@ -287,10 +281,11 @@ startBlocking() {
 	}
 
 processVideos(options = {}) {
-  if (!this.extensionEnabled || (this.rules.length === 0 && this.blockedVideoIds.length === 0)) return;
+  if (!this.extensionEnabled || (this.rules.length === 0 && this.blockedVideoIds.length === 0)) return false;
 
-  const { targetVideoId, retryCount = 0 } = options; // Track retry attempts
-  const maxRetries = 3; // Limit retries to avoid infinite loop
+  // Target recommendation section videos
+  const { targetVideoId, force = false } = options;
+  
   const selectors = [
     '#related yt-lockup-view-model',
     '#items yt-lockup-view-model',
@@ -311,42 +306,16 @@ processVideos(options = {}) {
 
   let videoElements = [];
   if (targetVideoId) {
-    // Broaden selector to include Shorts and other link formats
-    const linkElements = document.querySelectorAll(
-      `a[href*="/watch?v=${targetVideoId}"], a[href*="/shorts/${targetVideoId}"], a[href*="${targetVideoId}"]`
-    );
-    videoElements = Array.from(linkElements)
+    videoElements = Array.from(document.querySelectorAll(`a[href*="/watch?v=${targetVideoId}"]`))
       .map(link => link.closest(selectors))
-      .filter(el => el && !el.dataset?.blockerProcessed); // Only include unprocessed elements
-    console.log('YouTube Video Blocker: Found', videoElements.length, 'video elements for target ID:', targetVideoId, 'using links:', linkElements.length);
+      .filter(el => el && (force || !el.dataset.blockerProcessed));						   
   } else {
-    videoElements = document.querySelectorAll(selectors);
-    console.log('YouTube Video Blocker: Found', videoElements.length, 'video elements for general processing');
+    videoElements = Array.from(document.querySelectorAll(selectors))
+      .filter(el => force || !el.dataset.blockerProcessed);
   }
 
-  if (videoElements.length === 0 && targetVideoId && retryCount < maxRetries) {
-    console.warn('YouTube Video Blocker: No elements found for video ID:', targetVideoId, 'retry attempt:', retryCount + 1);
-    // Check if the video is already blocked to avoid unnecessary retries
-    const isBlocked = Array.from(document.querySelectorAll(selectors)).some(el => {
-      const link = el.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]');
-      if (link) {
-        const href = link.getAttribute('href');
-        const videoIdMatch = href.match(/v=([a-zA-Z0-9_-]{11})|\/shorts\/([a-zA-Z0-9_-]{11})/);
-        const videoId = videoIdMatch ? (videoIdMatch[1] || videoIdMatch[2]) : null;
-        return videoId === targetVideoId && (el.dataset?.blockerProcessed === 'blocked' || el.style.display === 'none');
-      }
-      return false;
-    });
-
-    if (!isBlocked) {
-      setTimeout(() => {
-        if (!this.extensionEnabled) return;
-        console.log('YouTube Video Blocker: Retrying processVideos for video ID:', targetVideoId, 'attempt:', retryCount + 1);
-        this.processVideos({ targetVideoId, retryCount: retryCount + 1 });
-      }, 500);
-    } else {
-      console.log('YouTube Video Blocker: Video ID:', targetVideoId, 'already blocked, stopping retries');
-    }
+  console.log('YouTube Video Blocker: Found', videoElements.length, 'video elements');
+  if (videoElements.length === 0 && !targetVideoId) {
     // Log debugging info
     console.log('YouTube Video Blocker: Debugging DOM state:', {
       related: !!document.querySelector('#related'),
@@ -354,18 +323,23 @@ processVideos(options = {}) {
       renderer: !!document.querySelector('ytd-watch-next-secondary-results-renderer'),
       itemSection: !!document.querySelector('ytd-item-section-renderer'),
       continuation: !!document.querySelector('ytd-continuation-item-renderer'),
-      targetLinks: Array.from(document.querySelectorAll(`a[href*="${targetVideoId}"]`)).map(el => el.outerHTML).slice(0, 3),
       sampleElements: Array.from(document.querySelectorAll(
-        'yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-rich-item-renderer'
+        'yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer'
       )).map(el => el.tagName).slice(0, 3),
       sampleTitles: Array.from(document.querySelectorAll(
         '.yt-lockup-metadata-view-model__title span[role="text"], h3 a, #video-title, a.yt-lockup-metadata-view-model__title'
-      )).map(el => el.textContent?.trim()).slice(0, 3)
+      )).map(el => el.textContent.trim()).slice(0, 3)
     });
   }
+
+  let processed = false;
   videoElements.forEach(videoElement => {
     this.checkAndBlockVideo(videoElement);
+    if (targetVideoId && videoElement.querySelector(`a[href*="/watch?v=${targetVideoId}"]`)) {
+      processed = true;
+    }
   });
+  return processed;
 }
 
 checkAndBlockVideo(videoElement) {

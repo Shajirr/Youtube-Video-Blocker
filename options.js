@@ -41,11 +41,11 @@ class OptionsManager {
       if (result.blockedVideosCount) {
         this.elements.blockedCount.textContent = result.blockedVideosCount;
       }
-      
-      if (result.theme) {
-        document.documentElement.setAttribute('data-theme', result.theme);
-        this.elements.themeToggle.classList.toggle('active', result.theme === 'dark');
-      }
+	  
+	  if (result.theme) {
+		  document.documentElement.setAttribute('data-theme', result.theme);
+		  this.elements.themeToggle.classList.toggle('active', result.theme === 'light');
+	  }
       
       if (result.showPlaceholders !== undefined) {
         this.elements.showPlaceholders.checked = result.showPlaceholders;
@@ -100,19 +100,18 @@ class OptionsManager {
     }
   }
 
-  async toggleTheme() {
-    const currentTheme = document.documentElement.getAttribute('data-theme');
-    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    
+async toggleTheme() {
+  try {
+    this.elements.themeToggle.classList.toggle('active');
+    const newTheme = this.elements.themeToggle.classList.contains('active') ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', newTheme);
-    this.elements.themeToggle.classList.toggle('active', newTheme === 'dark');
-    
-    try {
-      await chrome.storage.sync.set({ theme: newTheme });
-    } catch (error) {
-      console.error('Error saving theme:', error);
-    }
+    await chrome.storage.sync.set({ theme: newTheme });
+    this.showStatus(`Switched to ${newTheme} theme`, 'success');
+  } catch (error) {
+    console.error('Error toggling theme:', error);
+    this.showStatus('Error toggling theme', 'error');
   }
+}
 
   parseRules(text) {
     return text

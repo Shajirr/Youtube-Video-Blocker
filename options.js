@@ -41,18 +41,22 @@ class OptionsManager {
       if (result.blockedVideosCount) {
         this.elements.blockedCount.textContent = result.blockedVideosCount;
       }
-	  
-	  if (result.theme) {
-		  document.documentElement.setAttribute('data-theme', result.theme);
-		  this.elements.themeToggle.classList.toggle('active', result.theme === 'light');
-	  }
+      
+      if (result.theme) {
+        document.documentElement.setAttribute('data-theme', result.theme);
+        this.elements.themeToggle.classList.toggle('active', result.theme === 'light');
+        chrome.storage.local.set({ 'yt-blocker-theme': result.theme }); // Sync cache
+      }
       
       if (result.showPlaceholders !== undefined) {
         this.elements.showPlaceholders.checked = result.showPlaceholders;
       }
+      
+      document.body.classList.add('theme-loaded'); // Reveal page
     } catch (error) {
       console.error('Error loading settings:', error);
       this.showStatus('Error loading settings', 'error');
+      document.body.classList.add('theme-loaded'); // Ensure page is visible
     }
   }
 
@@ -100,18 +104,19 @@ class OptionsManager {
     }
   }
 
-async toggleTheme() {
-  try {
-    this.elements.themeToggle.classList.toggle('active');
-    const newTheme = this.elements.themeToggle.classList.contains('active') ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', newTheme);
-    await chrome.storage.sync.set({ theme: newTheme });
-    this.showStatus(`Switched to ${newTheme} theme`, 'success');
-  } catch (error) {
-    console.error('Error toggling theme:', error);
-    this.showStatus('Error toggling theme', 'error');
+  async toggleTheme() {
+    try {
+      this.elements.themeToggle.classList.toggle('active');
+      const newTheme = this.elements.themeToggle.classList.contains('active') ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', newTheme);
+      await chrome.storage.sync.set({ theme: newTheme });
+      chrome.storage.local.set({ 'yt-blocker-theme': newTheme }); // Sync cache
+      this.showStatus(`Switched to ${newTheme} theme`, 'success');
+    } catch (error) {
+      console.error('Error toggling theme:', error);
+      this.showStatus('Error toggling theme', 'error');
+    }
   }
-}
 
   parseRules(text) {
     return text

@@ -33,26 +33,26 @@ async init() {
     if (namespace === 'sync') {
       if (changes.blockingRules) {
         this.rules = changes.blockingRules.newValue || [];
-        console.log('YouTube Video Blocker: Rules updated:', this.rules);
+        logDebug('YouTube Video Blocker: Rules updated:', this.rules);
         this.processVideos();
       }
       if (changes.blockedVideoIds && changes.lastUpdateInstance?.newValue !== this.instanceId) {
         this.blockedVideoIds = changes.blockedVideoIds.newValue || [];
-        console.log('YouTube Video Blocker: Blocked video IDs updated:', this.blockedVideoIds);
+        logDebug('YouTube Video Blocker: Blocked video IDs updated:', this.blockedVideoIds);
         this.processVideos();
       }
       if (changes.showPlaceholders) {
         this.showPlaceholders = changes.showPlaceholders.newValue !== false;
-        console.log('YouTube Video Blocker: Show placeholders updated:', this.showPlaceholders);
+        logDebug('YouTube Video Blocker: Show placeholders updated:', this.showPlaceholders);
         this.processVideos();
       }
       if (changes.theme) {
         this.theme = changes.theme.newValue || 'light';
-        console.log('YouTube Video Blocker: Theme updated:', this.theme);
+        logDebug('YouTube Video Blocker: Theme updated:', this.theme);
       }
       if (changes.extensionEnabled) {
         this.extensionEnabled = changes.extensionEnabled.newValue !== false;
-        console.log('YouTube Video Blocker: Extension enabled updated:', this.extensionEnabled);
+        logDebug('YouTube Video Blocker: Extension enabled updated:', this.extensionEnabled);
         if (!this.extensionEnabled) {
           this.unblockAllVideos();
           this.stop();
@@ -75,7 +75,7 @@ async loadSettings() {
     this.showPlaceholders = result.showPlaceholders !== false; // Default to true
     this.theme = result.theme || 'light';
     this.extensionEnabled = result.extensionEnabled !== false; // Default to true
-    console.log('YouTube Video Blocker: Loaded settings:', {
+    logDebug('YouTube Video Blocker: Loaded settings:', {
       rules: this.rules,
       blockedVideoIds: this.blockedVideoIds,
       showPlaceholders: this.showPlaceholders,
@@ -95,7 +95,7 @@ async loadSettings() {
 setupContextMenu() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'blockVideo' && message.url) {
-      console.log('YouTube Video Blocker: Received blockVideo message for URL:', message.url);
+      logDebug('YouTube Video Blocker: Received blockVideo message for URL:', message.url);
       const videoIdMatch = message.url.match(/v=([a-zA-Z0-9_-]{11})/);
       if (!videoIdMatch) {
         console.warn('YouTube Video Blocker: Invalid video ID in URL:', message.url);
@@ -105,7 +105,7 @@ setupContextMenu() {
       
       const videoId = videoIdMatch[1];
       if (this.blockedVideoIds.some(entry => entry.id === videoId)) {
-        console.log('YouTube Video Blocker: Video ID already blocked:', videoId);
+        logDebug('YouTube Video Blocker: Video ID already blocked:', videoId);
         sendResponse({ success: false, error: 'Video already blocked' });
         return;
       }
@@ -125,7 +125,7 @@ setupContextMenu() {
           );
           if (titleElement) {
             title = titleElement.textContent.trim();
-            console.log('YouTube Video Blocker: Found title:', title);
+            logDebug('YouTube Video Blocker: Found title:', title);
             break;
           }
         }
@@ -136,12 +136,12 @@ setupContextMenu() {
         blockedVideoIds: this.blockedVideoIds,
         lastUpdateInstance: this.instanceId
       }, () => {
-        console.log('YouTube Video Blocker: Blocked video:', { id: videoId, title: title || 'Unknown Title' });
+        logDebug('YouTube Video Blocker: Blocked video:', { id: videoId, title: title || 'Unknown Title' });
         // Process immediately and retry if needed
         const attemptProcess = (attempt = 1, maxAttempts = 5) => {
           const processed = this.processVideos({ targetVideoId: videoId, force: true });
           if (!processed && attempt < maxAttempts) {
-            console.log(`YouTube Video Blocker: Video ID ${videoId} not found, retrying (${attempt}/${maxAttempts})`);
+            logDebug(`YouTube Video Blocker: Video ID ${videoId} not found, retrying (${attempt}/${maxAttempts})`);
             requestAnimationFrame(() => attemptProcess(attempt + 1, maxAttempts));
           }
         };
@@ -159,7 +159,7 @@ setupMessageListener() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === 'toggleExtension') {
         this.extensionEnabled = message.enabled !== false;
-        console.log('YouTube Video Blocker: Received toggle message, enabled:', this.extensionEnabled);
+        logDebug('YouTube Video Blocker: Received toggle message, enabled:', this.extensionEnabled);
         if (!this.extensionEnabled) {
           this.unblockAllVideos();
           this.stop();
@@ -173,7 +173,7 @@ setupMessageListener() {
 
 startBlocking() {
   if (!this.extensionEnabled) return;
-  console.log('YouTube Video Blocker: Starting with', this.rules.length, 'rules, enabled:', this.extensionEnabled);
+  logDebug('YouTube Video Blocker: Starting with', this.rules.length, 'rules, enabled:', this.extensionEnabled);
 
   // Initial check
   this.processVideos();
@@ -207,7 +207,7 @@ startBlocking() {
     });
 
     if (addedVideos.size > 0) {
-      console.log('YouTube Video Blocker: Detected', addedVideos.size, 'new video elements, processing');
+      logDebug('YouTube Video Blocker: Detected', addedVideos.size, 'new video elements, processing');
       addedVideos.forEach(video => this.checkAndBlockVideo(video));
     }
   });
@@ -231,7 +231,7 @@ startBlocking() {
     });
 
     if (containerChanged) {
-      console.log('YouTube Video Blocker: Detected container change, re-attaching observer');
+      logDebug('YouTube Video Blocker: Detected container change, re-attaching observer');
       this.observer.disconnect();
       this.findTargetNode();
       this.processVideos();
@@ -251,7 +251,7 @@ startBlocking() {
 	findTargetNode() {
 	  const targetNode = document.querySelector('#related, ytd-watch-next-secondary-results-renderer');
 	  if (targetNode) {
-		console.log('YouTube Video Blocker: Observing target node:', targetNode.id || targetNode.tagName);
+		logDebug('YouTube Video Blocker: Observing target node:', targetNode.id || targetNode.tagName);
 		this.observer.observe(targetNode, {
 		  childList: true,
 		  subtree: true
@@ -268,7 +268,7 @@ startBlocking() {
 		  if (!this.observer || !this.extensionEnabled) return;
 		  const retryNode = document.querySelector('#related, ytd-watch-next-secondary-results-renderer');
 		  if (retryNode && retryNode !== document.body) {
-			console.log('YouTube Video Blocker: Retry found target node:', retryNode.id || retryNode.tagName);
+			logDebug('YouTube Video Blocker: Retry found target node:', retryNode.id || retryNode.tagName);
 			this.observer.disconnect();
 			this.observer.observe(retryNode, {
 			  childList: true,
@@ -314,10 +314,10 @@ processVideos(options = {}) {
       .filter(el => force || !el.dataset.blockerProcessed);
   }
 
-  console.log('YouTube Video Blocker: Found', videoElements.length, 'video elements');
+  logDebug('YouTube Video Blocker: Found', videoElements.length, 'video elements');
   if (videoElements.length === 0 && !targetVideoId) {
     // Log debugging info
-    console.log('YouTube Video Blocker: Debugging DOM state:', {
+    logDebug('YouTube Video Blocker: Debugging DOM state:', {
       related: !!document.querySelector('#related'),
       items: !!document.querySelector('#items'),
       renderer: !!document.querySelector('ytd-watch-next-secondary-results-renderer'),
@@ -384,7 +384,7 @@ checkAndBlockVideo(videoElement) {
   }) || (videoId && this.blockedVideoIds.some(entry => entry.id === videoId));
 
   if (shouldBlock) {
-    console.log(`YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ''}`);
+    logDebug(`YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ''}`);
     if (!this.showPlaceholders) {
       videoElement.style.display = 'none';
       this.removeVideo(videoElement, title);
@@ -508,7 +508,7 @@ new MutationObserver(() => {
   if (location.href !== currentUrl) {
     currentUrl = location.href;
     if (currentUrl.includes('/watch')) {
-      console.log('YouTube Video Blocker: Navigation detected, resetting observer');
+      logDebug('YouTube Video Blocker: Navigation detected, resetting observer');
       if (videoBlocker) {
         videoBlocker.stop();
         videoBlocker.startBlocking();

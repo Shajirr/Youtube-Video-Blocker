@@ -35,11 +35,19 @@
             padding: 0;
         }
 
+        html:not([data-theme]) body {
+            display: none; /* Prevent rendering until theme is set */
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
             background-color: var(--bg-primary);
             color: var(--text-primary);
             line-height: 1.5;
+            transition: none; /* Disable transitions during load */
+        }
+
+        body.theme-loaded {
             transition: background-color 0.3s ease, color 0.3s ease;
         }
 
@@ -437,7 +445,7 @@ QNK-GQT9Jyo: Example Video Title</div>
             </div>
         </div>
     </div>
-
+    <script src="init-theme.js"></script>
     <script src="options.js"></script>
 </body>
 </html>

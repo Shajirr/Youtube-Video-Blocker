@@ -350,7 +350,7 @@
             <h1>🚫 YouTube Video Blocker</h1>
             <div class="theme-toggle">
                 <span>🌙</span>
-                <div class="theme-switch" id="themeToggle"></div>
+                <div class="theme-switch active" id="themeToggle"></div>
                 <span>☀️</span>
             </div>
         </header>
@@ -367,7 +367,7 @@
                     <textarea 
                         id="blockingRules" 
                         class="textarea" 
-                        placeholder="Enter keywords or phrases to block videos containing them in the title...&#10;&#10;Example:&#10;scam&#10;clickbait&#10;fake news&#10;conspiracy"
+                        placeholder="Enter keywords or phrases to block videos containing them in the title...&#10;Examples:&#10;react&#10;reacts&#10;situation is crazy&#10;you won't believe&#10;what just happened&#10;"
                     ></textarea>
                     <div class="help-text">
                         • Each rule should be on a separate line<br>
@@ -395,22 +395,29 @@
             </div>
 
             <div class="form-group">
-                <label>
+                <label for="showPlaceholders">
                     <input type="checkbox" id="showPlaceholders" checked>
                     Show placeholders for blocked videos
+                </label>
+				<label for="debugMode">
+                    <input type="checkbox" id="debugMode">
+                    Enable debug logging
                 </label>
             </div>
             <div class="stats">
                 <div class="stat-item">
-                    <div class="stat-number" id="ruleCount">0</div>
-                    <div class="stat-label">Active Rules</div>
+                    <div class="stat-number" id="titleRuleCount">0</div>
+                    <div class="stat-label">Title Rules</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="blockedIdCount">0</div>
+                    <div class="stat-label">Blocked IDs</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-number" id="blockedCount">0</div>
                     <div class="stat-label">Videos Blocked</div>
                 </div>
             </div>
-
             <div class="button-group">
                 <button class="btn btn-primary" id="saveBtn">
                     💾 Save Rules
@@ -432,18 +439,15 @@
                 This extension blocks YouTube videos in the recommendations section based on title or video ID matching. 
                 When a video title or ID matches your blocking rules, it will be hidden and replaced with a "Video Blocked" message.
             </p>
-            
-            <div class="example-section">
-                <div class="example-title">Example Rules:</div>
-                <div class="example-rules">scammer
-clickbait
-fake news
-conspiracy theory
-drama
-reaction
-QNK-GQT9Jyo: Example Video Title</div>
-            </div>
+                <label for="testTitles">Sample Video Titles for Testing (one per line):</label>
+                <textarea id="testTitles" class="textarea" rows="8" placeholder="Enter video titles to test against your rules, one per line."
+				></textarea>
         </div>
+		
+		<div class="section" id="testResultsSection" style="display: none;">
+			<div class="section-title">Test Results</div>
+			<div id="testResults" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; white-space: pre-wrap; max-height: 300px; overflow-y: auto;"></div>
+		</div>
     </div>
     <script src="init-theme.js"></script>
     <script src="options.js"></script>

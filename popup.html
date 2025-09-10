@@ -166,24 +166,28 @@
 </head>
 <body>
     <div class="header">
-        <h1>🚫 Video Blocker</h1>
-        <p>Block YouTube videos by title</p>
+        <h1>🚫 Youtube Video Blocker</h1>
+        <p>Block YT videos by title or ID</p>
     </div>
 
     <div class="stats">
         <div class="stat-item">
-            <div class="stat-number" id="ruleCount">0</div>
-            <div class="stat-label">Rules</div>
+            <div class="stat-number" id="titleRuleCount">0</div>
+            <div class="stat-label">Title Rules</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-number" id="blockedIdCount">0</div>
+            <div class="stat-label">Blocked IDs</div>
         </div>
         <div class="stat-item">
             <div class="stat-number" id="blockedCount">0</div>
-            <div class="stat-label">Blocked</div>
+            <div class="stat-label">Videos Blocked</div>
         </div>
     </div>
 
     <div class="actions">
         <button class="btn btn-primary" id="openOptions">
-            ⚙️ Manage Rules
+            ⚙️ Settings
         </button>
         <button class="btn btn-secondary" id="toggleExtension">
             ⏸️ Pause Blocking

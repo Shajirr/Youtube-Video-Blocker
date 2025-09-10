@@ -1,15 +1,52 @@
 // YouTube Video Blocker Options Script
+
+let DEBUG = false; // default fallback
+
+// Load debug setting asynchronously
+chrome.storage.local.get(['DEBUG'], (result) => {
+  DEBUG = result.DEBUG !== undefined ? result.DEBUG : false;
+});
+
+// Optional: Listen for debug setting changes
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local' && changes.DEBUG) {
+    DEBUG = changes.DEBUG.newValue;
+    console.log('Debug mode changed to:', DEBUG);
+  }
+});
+
+function logDebug(...args) {
+  if (DEBUG) console.log(...args);
+}
+
+// Default sample titles to populate the textarea
+const defaultTitles = [
+	"Amazing Cat Videos Compilation",
+	"SCAMMER Gets EXPOSED!!!",
+	"Clickbait Title YOU WON'T BELIEVE",
+	"How to Cook Pasta - Simple Tutorial",
+	"Reaction Video to Popular Song",
+	"I Tried Fortnite Cheats… And This Happened",
+	"I Tried the Viral Money Hack – Insane Results!",
+	"Win Free PS5 Now – Limited Spots Left!",
+	"One Stock to Make You Rich Overnight",
+	"Cure Diseases with This Kitchen Item Fast",
+	"ASMR Challenge That Almost Killed Me"
+];
 class OptionsManager {
   constructor() {
     this.elements = {
+	  debugMode: document.getElementById('debugMode'),
       blockingRules: document.getElementById('blockingRules'),
       blockedVideoIds: document.getElementById('blockedVideoIds'),
+	  testTitles: document.getElementById('testTitles'),
       showPlaceholders: document.getElementById('showPlaceholders'),
       saveBtn: document.getElementById('saveBtn'),
       testBtn: document.getElementById('testBtn'),
       resetBtn: document.getElementById('resetBtn'),
       statusMessage: document.getElementById('statusMessage'),
-      ruleCount: document.getElementById('ruleCount'),
+      titleRuleCount: document.getElementById('titleRuleCount'),
+	  blockedIdCount: document.getElementById('blockedIdCount'),
       blockedCount: document.getElementById('blockedCount'),
       themeToggle: document.getElementById('themeToggle'),
       tabs: document.querySelectorAll('.tab'),
@@ -29,6 +66,11 @@ class OptionsManager {
   async loadSettings() {
     try {
       const result = await chrome.storage.sync.get(['blockingRules', 'blockedVideoIds', 'blockedVideosCount', 'theme', 'showPlaceholders']);
+	  
+	  const debugResult = await chrome.storage.local.get(['DEBUG']);
+	  const debugEnabled = debugResult.DEBUG !== undefined ? debugResult.DEBUG : false;
+      this.elements.debugMode.checked = debugEnabled;
+      DEBUG = debugEnabled;
       
       if (result.blockingRules) {
         this.elements.blockingRules.value = result.blockingRules.join('\n');
@@ -52,6 +94,11 @@ class OptionsManager {
         this.elements.showPlaceholders.checked = result.showPlaceholders;
       }
       
+	  // Populate testTitles with default values if empty
+	  if (this.elements.testTitles && !this.elements.testTitles.value.trim()) {
+		this.elements.testTitles.value = defaultTitles.join('\n');
+	  }	
+		
       document.body.classList.add('theme-loaded'); // Reveal page
     } catch (error) {
       console.error('Error loading settings:', error);
@@ -68,6 +115,7 @@ class OptionsManager {
     this.elements.blockedVideoIds.addEventListener('input', () => this.updateStats());
     this.elements.showPlaceholders.addEventListener('change', () => this.saveShowPlaceholders());
     this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
+	this.elements.debugMode.addEventListener('change', () => this.saveDebugMode());
     
     // Auto-save on input (debounced)
     let saveTimeout;
@@ -138,12 +186,13 @@ class OptionsManager {
       .filter(entry => entry);
   }
   updateStats() {
-    const rules = this.parseRules(this.elements.blockingRules.value);
+    const titleRules = this.parseRules(this.elements.blockingRules.value);
     const blockedVideoIds = this.elements.blockedVideoIds.value
       .split('\n')
       .map(line => line.split(':')[0].trim())
       .filter(id => id && id.match(/^[a-zA-Z0-9_-]{11}$/));
-    this.elements.ruleCount.textContent = rules.length + blockedVideoIds.length;
+	this.elements.titleRuleCount.textContent = titleRules.length;
+	this.elements.blockedIdCount.textContent = blockedVideoIds.length;
   }
 
   async saveRules(autoSave = false) {
@@ -182,6 +231,26 @@ class OptionsManager {
       this.showStatus('Error saving placeholder setting', 'error');
     }
   }
+  
+  async saveDebugMode() {
+    try {
+      if (!this.elements.debugMode) return;
+      const enabled = this.elements.debugMode.checked;
+      
+      // Save to chrome.storage.local
+      await chrome.storage.local.set({ DEBUG: enabled });
+      
+      // Update the local DEBUG variable immediately
+      DEBUG = enabled;
+      
+      this.showStatus(`Debug mode ${enabled ? 'enabled' : 'disabled'}`, 'success');
+      logDebug('Debug mode changed from options:', enabled);
+    } catch (error) {
+      console.error('Error saving debug mode:', error);
+      this.showStatus('Error saving debug mode', 'error');
+    }
+  }
+  
   testRules() {
     const rules = this.parseRules(this.elements.blockingRules.value);
     
@@ -190,41 +259,70 @@ class OptionsManager {
       return;
     }
     
-    // Sample video titles for testing
-    const sampleTitles = [
-      "Amazing Cat Videos Compilation",
-      "SCAMMER Gets EXPOSED!!!",
-      "Clickbait Title YOU WON'T BELIEVE",
-      "How to Cook Pasta - Simple Tutorial",
-      "FAKE NEWS About Celebrity Drama",
-      "Conspiracy Theory About Space",
-      "Reaction Video to Popular Song",
-      "Educational Content About Science"
-    ];
+    // Get user-provided test titles, with fallback to default samples
+    const testTitlesElement = this.elements.testTitles;
+    let testTitles = [];
+    
+    if (testTitlesElement && testTitlesElement.value.trim()) {
+      // Use user-provided titles
+      testTitles = testTitlesElement.value
+        .split('\n')
+        .map(title => title.trim())
+        .filter(title => title.length > 0);
+    }
+    
+    if (testTitles.length === 0) {
+      // Fallback to default sample titles and populate the textarea
+      testTitles = defaultTitles;
+      testTitlesElement.value = defaultTitles.join('\n');
+    }
     
     const blockedTitles = [];
+    const results = [];
     
-    sampleTitles.forEach(title => {
-      const shouldBlock = rules.some(rule => 
-        title.toLowerCase().includes(rule.toLowerCase())
-      );
+    testTitles.forEach(title => {
+      const matchedRules = [];
+      rules.forEach(rule => {
+        if (title.toLowerCase().includes(rule.toLowerCase())) {
+          matchedRules.push(rule);
+        }
+      });
       
-      if (shouldBlock) {
+      if (matchedRules.length > 0) {
         blockedTitles.push(title);
+        results.push(`❌ "${title}" (matches: ${matchedRules.join(', ')})`);
+      } else {
+        results.push(`✅ "${title}"`);
       }
     });
     
-    if (blockedTitles.length > 0) {
-      this.showStatus(
-        `Test complete: ${blockedTitles.length} out of ${sampleTitles.length} sample videos would be blocked`,
-        'success'
-      );
-    } else {
-      this.showStatus(
-        `Test complete: None of the ${sampleTitles.length} sample videos would be blocked`,
-        'success'
-      );
+    // Create detailed results message
+    const totalTested = testTitles.length;
+    const totalBlocked = blockedTitles.length;
+    const totalAllowed = totalTested - totalBlocked;
+    
+    let detailedResults = `Test Results Summary:\n`;
+    detailedResults += `${totalBlocked} blocked, ${totalAllowed} allowed out of ${totalTested} titles\n\n`;
+    detailedResults += `Detailed Results:\n`;
+    detailedResults += results.join('\n');
+    
+    // Show results in the UI console
+    const testResultsSection = document.getElementById('testResultsSection');
+    const testResultsDiv = document.getElementById('testResults');
+    
+    if (testResultsSection && testResultsDiv) {
+      testResultsDiv.textContent = detailedResults;
+      testResultsSection.style.display = 'block';
+      
+      // Scroll to results
+      testResultsSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+    
+    // Show summary in status message
+    this.showStatus(
+      `Test complete: ${totalBlocked} blocked, ${totalAllowed} allowed out of ${totalTested} titles`,
+      'success'
+    );
   }
 
   async resetCounters() {

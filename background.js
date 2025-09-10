@@ -1,11 +1,26 @@
-const DEBUG = false; // Toggle for debug logging
+chrome.storage.local.set({ DEBUG: false }); // DEBUG value on initial load
+
+let DEBUG = false; // default fallback
+
+// Load debug setting asynchronously
+chrome.storage.local.get(['DEBUG'], (result) => {
+  DEBUG = result.DEBUG !== undefined ? result.DEBUG : false;
+});
 
 function logDebug(...args) {
   if (DEBUG) console.log(...args);
 }
 
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local' && changes.DEBUG) {
+    DEBUG = changes.DEBUG.newValue;
+    console.log('Debug mode changed to:', DEBUG);
+  }
+});
+
 // YouTube Video Blocker Background Script
 chrome.runtime.onInstalled.addListener(() => {
+	
   logDebug('YouTube Video Blocker: Setting up context menu');
   // Remove existing menu to prevent duplicate ID error
   chrome.contextMenus.remove('block-youtube-video', () => {
@@ -18,8 +33,13 @@ chrome.runtime.onInstalled.addListener(() => {
       id: 'block-youtube-video',
       title: 'Block video',
       contexts: ['link'],
-      documentUrlPatterns: ['*://*.youtube.com/watch*'],
-      targetUrlPatterns: ['*://*.youtube.com/watch?v=*']
+      documentUrlPatterns: [
+        '*://*.youtube.com/*'  // Allow context menu on all YouTube pages
+      ],
+      targetUrlPatterns: [
+        '*://*.youtube.com/watch?v=*',  // Watch URLs
+        '*://*.youtube.com/shorts/*'    // Shorts URLs
+      ]
     }, () => {
       if (chrome.runtime.lastError) {
         console.error('Error creating context menu:', chrome.runtime.lastError);

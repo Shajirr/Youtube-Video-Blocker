@@ -1,8 +1,29 @@
 // YouTube Video Blocker Popup Script
+
+let DEBUG = false; // default fallback
+
+// Load debug setting asynchronously
+chrome.storage.local.get(['DEBUG'], (result) => {
+  DEBUG = result.DEBUG !== undefined ? result.DEBUG : false;
+});
+
+// Optional: Listen for debug setting changes
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'local' && changes.DEBUG) {
+    DEBUG = changes.DEBUG.newValue;
+    console.log('Debug mode changed to:', DEBUG);
+  }
+});
+
+function logDebug(...args) {
+  if (DEBUG) console.log(...args);
+}
+
 class PopupManager {
   constructor() {
     this.elements = {
-      ruleCount: document.getElementById('ruleCount'),
+      titleRuleCount: document.getElementById('titleRuleCount'),
+	  blockedIdCount: document.getElementById('blockedIdCount'),
       blockedCount: document.getElementById('blockedCount'),
       openOptions: document.getElementById('openOptions'),
       toggleExtension: document.getElementById('toggleExtension'),
@@ -23,15 +44,18 @@ class PopupManager {
     try {
       const result = await chrome.storage.sync.get([
         'blockingRules',
+		'blockedVideoIds',
         'blockedVideosCount',
         'extensionEnabled'
       ]);
       
-      const rules = result.blockingRules || [];
+      const titleRules = result.blockingRules || [];
+      const blockedVideoIds = result.blockedVideoIds || [];
       const blockedCount = result.blockedVideosCount || 0;
       this.isEnabled = result.extensionEnabled !== false; // Default to true
       
-      this.elements.ruleCount.textContent = rules.length;
+      this.elements.titleRuleCount.textContent = titleRules.length;
+      this.elements.blockedIdCount.textContent = blockedVideoIds.length;
       this.elements.blockedCount.textContent = blockedCount;
       
     } catch (error) {

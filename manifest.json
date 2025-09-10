@@ -1,12 +1,15 @@
 {
   "manifest_version": 3,
   "name": "YouTube Video Blocker",
-  "version": "2025.09.05",
+  "version": "2025.9.10",
   "description": "Block YouTube videos based on titles / IDs",
   
   "browser_specific_settings": {
     "gecko": {
-      "id": "@youtube-video-blocker.shajirr"
+      "id": "@youtube-video-blocker.shajirr",
+	  "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   },
   
@@ -27,7 +30,13 @@
   
   "content_scripts": [
     {
-      "matches": ["*://*.youtube.com/watch*"],
+	"matches": [
+        "*://*.youtube.com/watch*",
+        "*://*.youtube.com/feed/subscriptions",
+        "*://*.youtube.com/results*",
+        "*://youtube.com/",
+        "*://www.youtube.com/"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
@@ -41,13 +50,13 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "YouTube Video Blocker",
-    "default_icon": "icon.png"
+    "default_icon": "icon.svg"
   },
   
   "icons": {
-    "16": "icon.png",
-    "32": "icon.png",
-    "48": "icon.png",
-    "128": "icon.png"
+    "16": "icon.svg",
+    "32": "icon.svg",
+    "48": "icon.svg",
+    "128": "icon.svg"
   }
 }

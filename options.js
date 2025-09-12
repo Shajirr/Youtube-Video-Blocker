@@ -1,18 +1,22 @@
 // YouTube Video Blocker Options Script
 
-let DEBUG = false; // default fallback
+let DEBUG;
 
-// Load debug setting asynchronously
-chrome.storage.local.get(['DEBUG'], (result) => {
-  DEBUG = result.DEBUG !== undefined ? result.DEBUG : false;
-});
-
-// Optional: Listen for debug setting changes
+// Listen for debug setting changes
 chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === 'local' && changes.DEBUG) {
-    DEBUG = changes.DEBUG.newValue;
-    console.log('Debug mode changed to:', DEBUG);
-  }
+    if (namespace === 'local' && changes.DEBUG) {
+        const newValue = changes.DEBUG.newValue === true || changes.DEBUG.newValue === false ? changes.DEBUG.newValue : false;
+        DEBUG = newValue;
+        if (this.elements && this.elements.debugMode) {
+            this.elements.debugMode.checked = newValue;
+        }
+        logDebug('YouTube Video Blocker: Debug mode changed via storage to:', newValue);
+    }
+    if (namespace === 'sync' && changes.removeShorts && this.elements && this.elements.removeShorts) {
+        const newValue = changes.removeShorts.newValue === true || changes.removeShorts.newValue === false ? changes.removeShorts.newValue : false;
+        this.elements.removeShorts.checked = newValue;
+        logDebug('YouTube Video Blocker: Remove Shorts changed via storage to:', newValue);
+    }
 });
 
 function logDebug(...args) {
@@ -33,6 +37,7 @@ const defaultTitles = [
 	"Cure Diseases with This Kitchen Item Fast",
 	"ASMR Challenge That Almost Killed Me"
 ];
+
 class OptionsManager {
   constructor() {
     this.elements = {
@@ -41,6 +46,7 @@ class OptionsManager {
       blockedVideoIds: document.getElementById('blockedVideoIds'),
 	  testTitles: document.getElementById('testTitles'),
       showPlaceholders: document.getElementById('showPlaceholders'),
+      removeShorts: document.getElementById('removeShorts'),
       saveBtn: document.getElementById('saveBtn'),
       testBtn: document.getElementById('testBtn'),
       resetBtn: document.getElementById('resetBtn'),
@@ -68,9 +74,10 @@ class OptionsManager {
       const result = await chrome.storage.sync.get(['blockingRules', 'blockedVideoIds', 'blockedVideosCount', 'theme', 'showPlaceholders']);
 	  
 	  const debugResult = await chrome.storage.local.get(['DEBUG']);
-	  const debugEnabled = debugResult.DEBUG !== undefined ? debugResult.DEBUG : false;
+	  const debugEnabled = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
       this.elements.debugMode.checked = debugEnabled;
       DEBUG = debugEnabled;
+      logDebug('YouTube Video Blocker: Loaded debug mode:', debugEnabled);
       
       if (result.blockingRules) {
         this.elements.blockingRules.value = result.blockingRules.join('\n');
@@ -94,6 +101,10 @@ class OptionsManager {
         this.elements.showPlaceholders.checked = result.showPlaceholders;
       }
       
+      if (result.removeShorts !== undefined) {
+        this.elements.removeShorts.checked = result.removeShorts;
+      }
+      
 	  // Populate testTitles with default values if empty
 	  if (this.elements.testTitles && !this.elements.testTitles.value.trim()) {
 		this.elements.testTitles.value = defaultTitles.join('\n');
@@ -114,6 +125,7 @@ class OptionsManager {
     this.elements.blockingRules.addEventListener('input', () => this.updateStats());
     this.elements.blockedVideoIds.addEventListener('input', () => this.updateStats());
     this.elements.showPlaceholders.addEventListener('change', () => this.saveShowPlaceholders());
+    this.elements.removeShorts.addEventListener('change', () => this.saveRemoveShorts());
     this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
 	this.elements.debugMode.addEventListener('change', () => this.saveDebugMode());
     
@@ -229,6 +241,16 @@ class OptionsManager {
     } catch (error) {
       console.error('Error saving placeholder setting:', error);
       this.showStatus('Error saving placeholder setting', 'error');
+    }
+  }
+  
+  async saveRemoveShorts() {
+    try {
+      await chrome.storage.sync.set({ removeShorts: this.elements.removeShorts.checked });
+      this.showStatus(`Shorts removal ${this.elements.removeShorts.checked ? 'enabled' : 'disabled'}`, 'success');
+    } catch (error) {
+      console.error('Error saving shorts removal setting:', error);
+      this.showStatus('Error saving shorts removal setting', 'error');
     }
   }
   

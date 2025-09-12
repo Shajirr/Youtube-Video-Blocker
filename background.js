@@ -67,3 +67,12 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     });
   }
 });
+// Redirect from Shorts URLs to Subscriptions
+chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+  if (details.url.includes('youtube.com/shorts/')) {
+    logDebug('YouTube Video Blocker: Detected Shorts URL, redirecting to Subscriptions:', details.url);
+    chrome.tabs.update(details.tabId, { url: 'https://www.youtube.com/feed/subscriptions' });
+  }
+}, {
+  url: [{ urlMatches: 'https://www.youtube.com/shorts/*' }]
+});

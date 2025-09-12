@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 // YouTube Video Blocker Content Script
 
 let DEBUG = false; // default fallback
@@ -107,23 +105,32 @@ class YouTubeVideoBlocker {
 
     async loadSettings() {
         try {
-            const result = await chrome.storage.sync.get(['blockingRules', 'blockedVideoIds', 'showPlaceholders', 'removeShorts', 'theme', 'extensionEnabled']);
+			const result = await chrome.storage.sync.get([
+				'blockingRules',
+				'blockedVideoIds',
+				'unblockedVideoIds',
+				'showPlaceholders',
+				'removeShorts',
+				'theme',
+				'extensionEnabled'
+			]);
 			const debugResult = await chrome.storage.local.get(['DEBUG']);
 			
             this.rules = result.blockingRules || [];
             this.blockedVideoIds = result.blockedVideoIds || [];
             this.showPlaceholders = result.showPlaceholders !== false; // Default to true
-            this.removeShorts = result.removeShorts === true; // Default to false
+           	this.removeShorts = result.removeShorts === true || result.removeShorts === false ? result.removeShorts : false;
             this.theme = result.theme || 'light';
             this.extensionEnabled = result.extensionEnabled !== false; // Default to true
             DEBUG = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
-			logDebug('YouTube Video Blocker: Loaded settings:', {
+			logDebug('YouTube Video Blocker: Loaded settings in content script:', {
                 rules: this.rules,
                 blockedVideoIds: this.blockedVideoIds,
                 showPlaceholders: this.showPlaceholders,
                 removeShorts: this.removeShorts,
                 theme: this.theme,
-                extensionEnabled: this.extensionEnabled
+                extensionEnabled: this.extensionEnabled,
+				DEBUG: DEBUG
             });
         } catch (error) {
             console.error('Error loading settings:', error);

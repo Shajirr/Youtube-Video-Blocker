@@ -290,12 +290,6 @@ class YouTubeVideoBlocker {
                 style.textContent = 'yt-lockup-view-model:not([data-blocker-processed]), yt-lockup-view-model[data-blocker-processed="checked"], ytd-video-renderer:not([data-blocker-processed]), ytd-video-renderer[data-blocker-processed="checked"], ytd-compact-video-renderer:not([data-blocker-processed]), ytd-compact-video-renderer[data-blocker-processed="checked"], ytd-rich-item-renderer:not([data-blocker-processed]), ytd-rich-item-renderer[data-blocker-processed="checked"] { display: none; }';
                 document.head.appendChild(style);
             }
-
-            // Cleanup continuation elements
-            const cleanupContinuationElements = debounce(() => {
-                // ... (keep existing code)
-            }, 1000);
-            cleanupContinuationElements();
         };
 
         if (document.readyState === 'loading') {
@@ -435,10 +429,7 @@ class YouTubeVideoBlocker {
         }) || (videoId && this.blockedVideoIds.some(entry => entry.id === videoId));
 
         if (shouldBlock) {
-            logDebug(`YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: $ {
-                videoId
-            }
-` : ''}`);
+            logDebug(`YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: $ {videoId}` : ''}`);
             if (!this.showPlaceholders) {
                 videoElement.style.display = 'none';
                 this.removeVideo(videoElement, title);
@@ -767,7 +758,6 @@ class YouTubeVideoBlocker {
 
         logDebug('YouTube Video Blocker: Processing all existing videos');
 
-        // Use the same selectors as processVideos
         const selectors = [
             // Search page - results
             '#contents.ytd-item-section-renderer ytd-video-renderer',
@@ -870,7 +860,6 @@ class YouTubeVideoBlocker {
         return false;
     }
 
-    // Modified to include irrelevant search sections
     isShortsOrIrrelevantElement(element) {
         if (!element.matches)
             return false;
@@ -928,8 +917,7 @@ class YouTubeVideoBlocker {
 
         return false;
     }
-    
-    // Modified to include irrelevant search sections
+
     findShortsAndIrrelevantElements(container) {
         const selectors = [
             // Shorts selectors
@@ -971,33 +959,33 @@ class YouTubeVideoBlocker {
 
         // Special handling for Shorts link in sidebar
         if (this.removeShorts) {
-        const guideEntries = container.querySelectorAll('ytd-guide-entry-renderer');
-        guideEntries.forEach(entry => {
-            const titleElement = entry.querySelector('yt-formatted-string');
-            if (titleElement && titleElement.textContent.trim() === 'Shorts') {
+            const guideEntries = container.querySelectorAll('ytd-guide-entry-renderer');
+            guideEntries.forEach(entry => {
+                const titleElement = entry.querySelector('yt-formatted-string');
+                if (titleElement && titleElement.textContent.trim() === 'Shorts') {
                     elements.push(entry);
                 }
-        });
+            });
 
-        // Check ytd-video-renderer and ytd-compact-video-renderer for Shorts indicators
-        const videoRenderers = container.querySelectorAll('ytd-video-renderer, ytd-compact-video-renderer');
-        videoRenderers.forEach(video => {
-            if (this.isVideoRendererShorts && this.isVideoRendererShorts(video)) {
-                elements.push(video);
-            }
-        });
+            // Check ytd-video-renderer and ytd-compact-video-renderer for Shorts indicators
+            const videoRenderers = container.querySelectorAll('ytd-video-renderer, ytd-compact-video-renderer');
+            videoRenderers.forEach(video => {
+                if (this.isVideoRendererShorts && this.isVideoRendererShorts(video)) {
+                    elements.push(video);
+                }
+            });
 
-        // Check ytd-rich-section-renderer for Shorts content
-        const richSections = container.querySelectorAll('ytd-rich-section-renderer');
-        richSections.forEach(section => {
-            if (section.querySelector('a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost')) {
-                elements.push(section);
-            }
-        });
-    }
+            // Check ytd-rich-section-renderer for Shorts content
+            const richSections = container.querySelectorAll('ytd-rich-section-renderer');
+            richSections.forEach(section => {
+                if (section.querySelector('a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost')) {
+                    elements.push(section);
+                }
+            });
+        }
 
         // Filter to include only valid Shorts or irrelevant elements
-        return elements.filter(el => this.isShortsOrIrrelevantElement(el)); 
+        return elements.filter(el => this.isShortsOrIrrelevantElement(el));
     }
 
     // Handle both Shorts and irrelevant search sections
@@ -1105,15 +1093,15 @@ class YouTubeVideoBlocker {
 
         // Also remove Shorts navigation link specifically
         if (this.removeShorts) {
-        const shortsNavLinks = document.querySelectorAll('ytd-guide-entry-renderer a[title*="Shorts"], ytd-guide-entry-renderer[title*="Shorts"]');
-        shortsNavLinks.forEach(link => {
-            const parentEntry = link.closest('ytd-guide-entry-renderer');
-            if (parentEntry) {
-                logDebug('YouTube Video Blocker: Removing Shorts nav link');
-                parentEntry.remove();
-            }
-        });
-    }
+            const shortsNavLinks = document.querySelectorAll('ytd-guide-entry-renderer a[title*="Shorts"], ytd-guide-entry-renderer[title*="Shorts"]');
+            shortsNavLinks.forEach(link => {
+                const parentEntry = link.closest('ytd-guide-entry-renderer');
+                if (parentEntry) {
+                    logDebug('YouTube Video Blocker: Removing Shorts nav link');
+                    parentEntry.remove();
+                }
+            });
+        }
     }
 
     unblockAllVideos() {

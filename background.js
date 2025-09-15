@@ -6,15 +6,6 @@ let DEBUG = false; // default fallback
 let removeShorts = false; // Default fallback for Shorts removal
 let cleanSearchResults = false; // Default fallback for Clean Search Results
 
-chrome.runtime.onInstalled.addListener(() => {
-    // Set default settings for testing
-    chrome.storage.sync.set({
-        cleanSearchResults: true
-    }, () => {
-        console.log('YouTube Video Blocker: Initialized cleanSearchResults to true for testing');
-    });
-});
-
 // Load initial settings
 async function loadSettings() {
     try {

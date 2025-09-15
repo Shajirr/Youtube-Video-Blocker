@@ -17,6 +17,11 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         this.elements.removeShorts.checked = newValue;
         logDebug('YouTube Video Blocker: Remove Shorts changed via storage to:', newValue);
     }
+    if (namespace === 'sync' && changes.cleanSearchResults && this.elements && this.elements.cleanSearchResults) {
+        const newValue = changes.cleanSearchResults.newValue === true || changes.cleanSearchResults.newValue === false ? changes.cleanSearchResults.newValue : false;
+        this.elements.cleanSearchResults.checked = newValue;
+        logDebug('YouTube Video Blocker: Clean Search Results changed via storage to:', newValue);
+    }
 });
 
 function logDebug(...args) {
@@ -48,6 +53,7 @@ class OptionsManager {
             testTitles: document.getElementById('testTitles'),
             showPlaceholders: document.getElementById('showPlaceholders'),
             removeShorts: document.getElementById('removeShorts'),
+            cleanSearchResults: document.getElementById('cleanSearchResults'),
             saveBtn: document.getElementById('saveBtn'),
             testBtn: document.getElementById('testBtn'),
             resetBtn: document.getElementById('resetBtn'),
@@ -78,7 +84,8 @@ class OptionsManager {
                         'blockedVideosCount',
                         'theme',
                         'showPlaceholders',
-                        'removeShorts'
+                        'removeShorts',
+                        'cleanSearchResults'
                     ]);
             const debugResult = await chrome.storage.local.get(['DEBUG']);
 
@@ -91,6 +98,10 @@ class OptionsManager {
             this.elements.removeShorts.checked = removeShortsEnabled;
             logDebug('YouTube Video Blocker: Loaded removeShorts:', removeShortsEnabled);
 
+            const cleanSearchResultsEnabled = result.cleanSearchResults === true || result.cleanSearchResults === false ? result.cleanSearchResults : false;
+            this.elements.cleanSearchResults.checked = cleanSearchResultsEnabled;
+            logDebug('YouTube Video Blocker: Loaded cleanSearchResults:', cleanSearchResultsEnabled);
+            
             if (result.blockingRules) {
                 this.elements.blockingRules.value = result.blockingRules.join('\n');
             }
@@ -134,6 +145,7 @@ class OptionsManager {
         this.elements.blockedVideoIds.addEventListener('input', () => this.updateStats());
         this.elements.showPlaceholders.addEventListener('change', () => this.saveShowPlaceholders());
         this.elements.removeShorts.addEventListener('change', () => this.saveRemoveShorts());
+        this.elements.cleanSearchResults.addEventListener('change', () => this.saveCleanSearchResults());
         this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
         this.elements.debugMode.addEventListener('change', () => this.saveDebugMode());
 
@@ -265,6 +277,18 @@ class OptionsManager {
         }
     }
 
+    async saveCleanSearchResults() {
+        try {
+            const enabled = this.elements.cleanSearchResults.checked;
+            await chrome.storage.sync.set({ cleanSearchResults: enabled });
+            this.showStatus(`Clean Search Results ${enabled ? 'enabled' : 'disabled'}`, 'success');
+            logDebug('YouTube Video Blocker: Saved cleanSearchResults:', enabled);
+        } catch (error) {
+            console.error('Error saving clean search results setting:', error);
+            this.showStatus('Error saving clean search results setting', 'error');
+        }
+    }
+    
     async saveDebugMode() {
         try {
             if (!this.elements.debugMode) return;

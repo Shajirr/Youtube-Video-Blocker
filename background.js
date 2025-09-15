@@ -4,17 +4,30 @@
 
 let DEBUG = false; // default fallback
 let removeShorts = false; // Default fallback for Shorts removal
+let cleanSearchResults = false; // Default fallback for Clean Search Results
+
+chrome.runtime.onInstalled.addListener(() => {
+    // Set default settings for testing
+    chrome.storage.sync.set({
+        cleanSearchResults: true
+    }, () => {
+        console.log('YouTube Video Blocker: Initialized cleanSearchResults to true for testing');
+    });
+});
 
 // Load initial settings
 async function loadSettings() {
     try {
-        const shortsRemoveRsult = await chrome.storage.sync.get(['removeShorts']);
+        const result = await chrome.storage.sync.get(['removeShorts', 'cleanSearchResults']);
 		const debugResult = await chrome.storage.local.get(['DEBUG']);
 		
-        removeShorts = shortsRemoveRsult.removeShorts === true || shortsRemoveRsult.removeShorts === false ? shortsRemoveRsult.removeShorts : false;
-		DEBUG = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
+        removeShorts = result.removeShorts === true || result.removeShorts === false ? result.removeShorts : false;
+        cleanSearchResults = result.cleanSearchResults === true || result.cleanSearchResults === false ? result.cleanSearchResults : false;
+        DEBUG = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
         logDebug('YouTube Video Blocker: Loaded settings:', {
-            removeShorts, DEBUG
+            removeShorts,
+            cleanSearchResults,
+            DEBUG
         });
     } catch (error) {
         console.error('YouTube Video Blocker: Error loading settings:', error);
@@ -40,11 +53,14 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         removeShorts = changes.removeShorts.newValue === true || changes.removeShorts.newValue === false ? changes.removeShorts.newValue : false;
         logDebug('YouTube Video Blocker: Remove Shorts changed to:', removeShorts);
     }
+    if (namespace === 'sync' && changes.cleanSearchResults) {
+        cleanSearchResults = changes.cleanSearchResults.newValue === true || changes.cleanSearchResults.newValue === false ? changes.cleanSearchResults.newValue : false;
+        logDebug('YouTube Video Blocker: Clean Search Results changed to:', cleanSearchResults);
+    }
 });
 
 // YouTube Video Blocker Background Script
 chrome.runtime.onInstalled.addListener(() => {
-
     logDebug('YouTube Video Blocker: Setting up context menu');
     // Remove existing menu to prevent duplicate ID error
     chrome.contextMenus.remove('block-youtube-video', () => {

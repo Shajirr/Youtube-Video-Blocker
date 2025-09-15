@@ -34,11 +34,12 @@ class YouTubeVideoBlocker {
         this.blockedVideoIds = []; // Array of { id: string, title: string }
         this.showPlaceholders = true;
         this.removeShorts = false;
+        this.cleanSearchResults = false;
         this.theme = 'light';
         this.extensionEnabled = true;
         this.observer = null;
         this.parentObserver = null;
-		this.videoObserver = null;
+        this.videoObserver = null;
         this.instanceId = Date.now() + '-' + Math.random().toString(36).substring(2, 9); // Unique instance ID
         this.unblockedVideoIds = new Set(); // Per-tab list of unblocked video IDs
         this.currentUrl = location.href;
@@ -47,12 +48,12 @@ class YouTubeVideoBlocker {
 
     async init() {
         await this.loadSettings();
-		logDebug('YouTube Video Blocker: Initialized with DEBUG:', DEBUG);
+        logDebug('YouTube Video Blocker: Initialized with DEBUG:', DEBUG);
         this.setupMessageListener();
         this.setupContextMenu();
         this.startBlocking();
 
-        // Listen for storage changes (rules, placeholders, theme, video IDs)
+        // Listen for storage changes
         const debouncedOnStorageChange = debounce((changes, namespace) => {
             if (namespace === 'sync') {
                 if (changes.blockingRules) {
@@ -73,7 +74,16 @@ class YouTubeVideoBlocker {
                 if (changes.removeShorts) {
                     this.removeShorts = changes.removeShorts.newValue === true;
                     logDebug('YouTube Video Blocker: Remove shorts updated:', this.removeShorts);
-                    if (this.removeShorts) {
+                    if (this.removeShorts || this.cleanSearchResults) {
+                        this.startShortsRemoval();
+                    } else {
+                        this.stopShortsRemoval();
+                    }
+                }
+                if (changes.cleanSearchResults) {
+                    this.cleanSearchResults = changes.cleanSearchResults.newValue === true;
+                    logDebug('YouTube Video Blocker: Clean search results updated:', this.cleanSearchResults);
+                    if (this.cleanSearchResults || this.removeShorts) {
                         this.startShortsRemoval();
                     } else {
                         this.stopShortsRemoval();
@@ -95,9 +105,9 @@ class YouTubeVideoBlocker {
                     }
                 }
             } else if (namespace === 'local' && changes.DEBUG) {
-				DEBUG = changes.DEBUG.newValue === true || changes.DEBUG.newValue === false ? changes.DEBUG.newValue : false;
-				logDebug('YouTube Video Blocker: Debug mode changed in content script to:', DEBUG);
-			}
+                DEBUG = changes.DEBUG.newValue === true || changes.DEBUG.newValue === false ? changes.DEBUG.newValue : false;
+                logDebug('YouTube Video Blocker: Debug mode changed in content script to:', DEBUG);
+            }
         }, 100);
 
         chrome.storage.onChanged.addListener(debouncedOnStorageChange);
@@ -105,32 +115,35 @@ class YouTubeVideoBlocker {
 
     async loadSettings() {
         try {
-			const result = await chrome.storage.sync.get([
-				'blockingRules',
-				'blockedVideoIds',
-				'unblockedVideoIds',
-				'showPlaceholders',
-				'removeShorts',
-				'theme',
-				'extensionEnabled'
-			]);
-			const debugResult = await chrome.storage.local.get(['DEBUG']);
-			
+            const result = await chrome.storage.sync.get([
+                        'blockingRules',
+                        'blockedVideoIds',
+                        'unblockedVideoIds',
+                        'showPlaceholders',
+                        'removeShorts',
+                        'cleanSearchResults',
+                        'theme',
+                        'extensionEnabled'
+                    ]);
+            const debugResult = await chrome.storage.local.get(['DEBUG']);
+
             this.rules = result.blockingRules || [];
             this.blockedVideoIds = result.blockedVideoIds || [];
             this.showPlaceholders = result.showPlaceholders !== false; // Default to true
-           	this.removeShorts = result.removeShorts === true || result.removeShorts === false ? result.removeShorts : false;
+            this.removeShorts = result.removeShorts === true || result.removeShorts === false ? result.removeShorts : false;
+            this.cleanSearchResults = result.cleanSearchResults === true || result.cleanSearchResults === false ? result.cleanSearchResults : false; // Default to false
             this.theme = result.theme || 'light';
             this.extensionEnabled = result.extensionEnabled !== false; // Default to true
             DEBUG = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
-			logDebug('YouTube Video Blocker: Loaded settings in content script:', {
+            logDebug('YouTube Video Blocker: Loaded settings in content script:', {
                 rules: this.rules,
                 blockedVideoIds: this.blockedVideoIds,
                 showPlaceholders: this.showPlaceholders,
                 removeShorts: this.removeShorts,
+                cleanSearchResults: this.cleanSearchResults,
                 theme: this.theme,
                 extensionEnabled: this.extensionEnabled,
-				DEBUG: DEBUG
+                DEBUG: DEBUG
             });
         } catch (error) {
             console.error('Error loading settings:', error);
@@ -138,6 +151,7 @@ class YouTubeVideoBlocker {
             this.blockedVideoIds = [];
             this.showPlaceholders = true;
             this.removeShorts = false;
+            this.cleanSearchResults = false;
             this.theme = 'light';
             this.extensionEnabled = true;
         }
@@ -257,41 +271,42 @@ class YouTubeVideoBlocker {
         });
     }
 
-	startBlocking() {
-		if (!this.extensionEnabled) return;
-		logDebug('YouTube Video Blocker: Starting with', this.rules.length, 'rules, enabled:', this.extensionEnabled);
+    startBlocking() {
+        if (!this.extensionEnabled)
+            return;
+        logDebug('YouTube Video Blocker: Starting with', this.rules.length, 'rules, enabled:', this.extensionEnabled);
 
-		const startObserving = () => {
-			if (this.removeShorts) {
-				this.startShortsRemoval();
-			}
+        const startObserving = () => {
+            if (this.removeShorts || this.cleanSearchResults) {
+                this.startShortsRemoval();
+            }
 
-			// Start video blocking (new)
-			this.startVideoBlocking();
+            // Start video blocking
+            this.startVideoBlocking();
 
-			if (!this.showPlaceholders) {
-				const style = document.createElement('style');
-				style.id = 'youtube-video-blocker-temp';
-				style.textContent = 'yt-lockup-view-model:not([data-blocker-processed]), yt-lockup-view-model[data-blocker-processed="checked"], ytd-video-renderer:not([data-blocker-processed]), ytd-video-renderer[data-blocker-processed="checked"], ytd-compact-video-renderer:not([data-blocker-processed]), ytd-compact-video-renderer[data-blocker-processed="checked"], ytd-rich-item-renderer:not([data-blocker-processed]), ytd-rich-item-renderer[data-blocker-processed="checked"] { display: none; }';
-				document.head.appendChild(style);
-			}
+            if (!this.showPlaceholders) {
+                const style = document.createElement('style');
+                style.id = 'youtube-video-blocker-temp';
+                style.textContent = 'yt-lockup-view-model:not([data-blocker-processed]), yt-lockup-view-model[data-blocker-processed="checked"], ytd-video-renderer:not([data-blocker-processed]), ytd-video-renderer[data-blocker-processed="checked"], ytd-compact-video-renderer:not([data-blocker-processed]), ytd-compact-video-renderer[data-blocker-processed="checked"], ytd-rich-item-renderer:not([data-blocker-processed]), ytd-rich-item-renderer[data-blocker-processed="checked"] { display: none; }';
+                document.head.appendChild(style);
+            }
 
-			// Cleanup continuation elements (keep as is)
-			const cleanupContinuationElements = debounce(() => {
-				// ... (keep existing code)
-			}, 1000);
-			cleanupContinuationElements();
-		};
+            // Cleanup continuation elements
+            const cleanupContinuationElements = debounce(() => {
+                // ... (keep existing code)
+            }, 1000);
+            cleanupContinuationElements();
+        };
 
-		if (document.readyState === 'loading') {
-			document.addEventListener('DOMContentLoaded', startObserving);
-		} else {
-			startObserving();
-		}
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', startObserving);
+        } else {
+            startObserving();
+        }
 
-		logDebug('Setup ParentObserver');
-		this.setupParentObserver();
-	}
+        logDebug('Setup ParentObserver');
+        this.setupParentObserver();
+    }
 
     setupParentObserver() {
         // Set up parent observer to detect container replacements
@@ -636,48 +651,48 @@ class YouTubeVideoBlocker {
         });
     }
 
-    // Shorts removal
+    // Shorts and search results cleanup
     startShortsRemoval() {
         if (!this.extensionEnabled)
             return;
-        logDebug('YouTube Video Blocker: Starting Shorts removal');
+        logDebug('YouTube Video Blocker: Starting Shorts and search results cleanup');
 
-        // Remove existing Shorts immediately
+        // Remove existing Shorts and irrelevant search sections immediately
         this.removeAllShorts();
 
-        // Set up observer for Shorts removal
+        // Set up observer for Shorts and search results cleanup
         this.shortsObserver = new MutationObserver((mutations) => {
-            if (!this.extensionEnabled || !this.removeShorts)
+            if (!this.extensionEnabled || (!this.removeShorts && !this.cleanSearchResults))
                 return;
 
-            let foundShorts = false;
+            let foundElements = false;
             mutations.forEach(mutation => {
                 if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
                     mutation.addedNodes.forEach(node => {
                         if (node.nodeType === 1) {
-                            // Check for Shorts elements
-                            if (this.isShortsElement(node)) {
-                                foundShorts = true;
+                            // Check for Shorts or irrelevant search elements
+                            if (this.isShortsOrIrrelevantElement(node)) {
+                                foundElements = true;
                                 this.removeShortsElement(node);
                             }
                             // Check within added nodes
-                            const shortsElements = node.querySelectorAll ?
-                                this.findShortsElements(node) : [];
-                            if (shortsElements.length > 0) {
-                                foundShorts = true;
-                                shortsElements.forEach(el => this.removeShortsElement(el));
+                            const elements = node.querySelectorAll ? this.findShortsAndIrrelevantElements(node) : [];
+
+                            if (elements.length > 0) {
+                                foundElements = true;
+                                elements.forEach(el => this.removeShortsElement(el));
                             }
                         }
                     });
                 }
             });
 
-            if (foundShorts) {
-                logDebug('YouTube Video Blocker: Removed Shorts elements');
+            if (foundElements) {
+                logDebug('YouTube Video Blocker: Removed Shorts or irrelevant search elements');
             }
         });
 
-        // Observe the entire document for Shorts
+        // Observe the entire document
         this.shortsObserver.observe(document.body, {
             childList: true,
             subtree: true
@@ -688,147 +703,151 @@ class YouTubeVideoBlocker {
         if (this.shortsObserver) {
             this.shortsObserver.disconnect();
             this.shortsObserver = null;
-            logDebug('YouTube Video Blocker: Stopped Shorts removal');
+            logDebug('YouTube Video Blocker: Stopped Shorts and search results cleanup');
         }
     }
-	
-	startVideoBlocking() {
-		if (!this.extensionEnabled) return;
-		logDebug('YouTube Video Blocker: Starting video blocking');
 
-		// Remove existing videos immediately
-		this.processAllVideos();
+    startVideoBlocking() {
+        if (!this.extensionEnabled)
+            return;
+        logDebug('YouTube Video Blocker: Starting video blocking');
 
-		// Set up observer for video blocking
-		this.videoObserver = new MutationObserver((mutations) => {
-			if (!this.extensionEnabled) return;
+        // Remove existing videos immediately
+        this.processAllVideos();
 
-			let foundVideos = false;
-			mutations.forEach(mutation => {
-				if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-					mutation.addedNodes.forEach(node => {
-						if (node.nodeType === 1) {
-							// Check if the added node is a video element
-							if (this.isVideoElement(node)) {
-								foundVideos = true;
-								this.checkAndBlockVideo(node);
-							}
-							// Check within added nodes
-							const videoElements = node.querySelectorAll ? this.findVideoElements(node) : [];
-							if (videoElements.length > 0) {
-								foundVideos = true;
-								videoElements.forEach(el => this.checkAndBlockVideo(el));
-							}
-						}
-					});
-				}
-			});
+        // Set up observer for video blocking
+        this.videoObserver = new MutationObserver((mutations) => {
+            if (!this.extensionEnabled)
+                return;
 
-			if (foundVideos) {
-				logDebug('YouTube Video Blocker: Processed new video elements from mutations');
-			}
-		});
+            let foundVideos = false;
+            mutations.forEach(mutation => {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    mutation.addedNodes.forEach(node => {
+                        if (node.nodeType === 1) {
+                            // Check if the added node is a video element
+                            if (this.isVideoElement(node)) {
+                                foundVideos = true;
+                                this.checkAndBlockVideo(node);
+                            }
+                            // Check within added nodes
+                            const videoElements = node.querySelectorAll ? this.findVideoElements(node) : [];
+                            if (videoElements.length > 0) {
+                                foundVideos = true;
+                                videoElements.forEach(el => this.checkAndBlockVideo(el));
+                            }
+                        }
+                    });
+                }
+            });
 
-		// Observe the entire document for videos
-		this.videoObserver.observe(document.body, {
-			childList: true,
-			subtree: true
-		});
-	}
-	
-	stopVideoBlocking() {
-		if (this.videoObserver) {
-			this.videoObserver.disconnect();
-			this.videoObserver = null;
-			logDebug('YouTube Video Blocker: Stopped video blocking observer');
-		}
-	}
-	
-	processAllVideos() {
-		if (!this.extensionEnabled) return;
+            if (foundVideos) {
+                logDebug('YouTube Video Blocker: Processed new video elements from mutations');
+            }
+        });
 
-		logDebug('YouTube Video Blocker: Processing all existing videos');
+        // Observe the entire document for videos
+        this.videoObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
 
-		// Use the same selectors as processVideos
-		const selectors = [
-			// Search page - results
-			'#contents.ytd-item-section-renderer ytd-video-renderer',
-			'ytd-item-section-renderer #contents ytd-video-renderer',
-			'#contents.ytd-item-section-renderer yt-lockup-view-model',
-			'ytd-item-section-renderer #contents yt-lockup-view-model',
-			'ytd-search ytd-video-renderer',
-			'ytd-search yt-lockup-view-model',
-			// Watch page - recommendations section
-			'#related yt-lockup-view-model',
-			'#items yt-lockup-view-model',
-			'ytd-watch-next-secondary-results-renderer yt-lockup-view-model',
-			'ytd-item-section-renderer yt-lockup-view-model',
-			'#related ytd-video-renderer',
-			'#items ytd-video-renderer',
-			'ytd-watch-next-secondary-results-renderer ytd-video-renderer',
-			'ytd-item-section-renderer ytd-video-renderer',
-			'#related ytd-compact-video-renderer',
-			'#items ytd-compact-video-renderer',
-			'ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer',
-			'ytd-item-section-renderer ytd-compact-video-renderer',
-			// Home page - main grid
-			'#contents ytd-rich-item-renderer',
-			'ytd-rich-grid-renderer ytd-rich-item-renderer',
-			'#contents yt-lockup-view-model',
-			'ytd-rich-grid-renderer yt-lockup-view-model',
-			// Subscriptions page
-			'ytd-section-list-renderer ytd-video-renderer',
-			'ytd-section-list-renderer yt-lockup-view-model',
-			'ytd-section-list-renderer ytd-rich-item-renderer',
-			// General fallbacks
-			'ytd-grid-video-renderer',
-			'ytd-rich-grid-video-renderer',
-			'ytd-shelf-renderer ytd-video-renderer',
-			'ytd-shelf-renderer yt-lockup-view-model',
-			'ytd-search-result-renderer'  // Potential new element
-		].join(', ');
+    stopVideoBlocking() {
+        if (this.videoObserver) {
+            this.videoObserver.disconnect();
+            this.videoObserver = null;
+            logDebug('YouTube Video Blocker: Stopped video blocking observer');
+        }
+    }
 
-		const videoElements = this.findVideoElements(document);
-		videoElements.forEach(element => {
-			this.checkAndBlockVideo(element);
-		});
-	}
-	
-	isVideoElement(element) {
-		if (!element.matches) return false;
+    processAllVideos() {
+        if (!this.extensionEnabled)
+            return;
 
-		return (
-			element.matches('yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-rich-grid-video-renderer, ytd-search-result-renderer') &&
-			!this.isVideoRendererShorts(element)  // Exclude Shorts if removeShorts is enabled, to avoid double-processing
-		);
-	}
-	
-	findVideoElements(container) {
-		const selectors = [
-			'yt-lockup-view-model',
-			'ytd-video-renderer',
-			'ytd-compact-video-renderer',
-			'ytd-rich-item-renderer',
-			'ytd-grid-video-renderer',
-			'ytd-rich-grid-video-renderer',
-			'ytd-search-result-renderer'
-		].join(', ');
+        logDebug('YouTube Video Blocker: Processing all existing videos');
 
-		let videoElements = [];
-		selectors.split(', ').forEach(selector => {
-			try {
-				const elements = container.querySelectorAll(selector);
-				videoElements = videoElements.concat(Array.from(elements));
-			} catch (e) {
-				logDebug('YouTube Video Blocker: Invalid selector:', selector, e);
-			}
-		});
+        // Use the same selectors as processVideos
+        const selectors = [
+            // Search page - results
+            '#contents.ytd-item-section-renderer ytd-video-renderer',
+            'ytd-item-section-renderer #contents ytd-video-renderer',
+            '#contents.ytd-item-section-renderer yt-lockup-view-model',
+            'ytd-item-section-renderer #contents yt-lockup-view-model',
+            'ytd-search ytd-video-renderer',
+            'ytd-search yt-lockup-view-model',
+            // Watch page - recommendations section
+            '#related yt-lockup-view-model',
+            '#items yt-lockup-view-model',
+            'ytd-watch-next-secondary-results-renderer yt-lockup-view-model',
+            'ytd-item-section-renderer yt-lockup-view-model',
+            '#related ytd-video-renderer',
+            '#items ytd-video-renderer',
+            'ytd-watch-next-secondary-results-renderer ytd-video-renderer',
+            'ytd-item-section-renderer ytd-video-renderer',
+            '#related ytd-compact-video-renderer',
+            '#items ytd-compact-video-renderer',
+            'ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer',
+            'ytd-item-section-renderer ytd-compact-video-renderer',
+            // Home page - main grid
+            '#contents ytd-rich-item-renderer',
+            'ytd-rich-grid-renderer ytd-rich-item-renderer',
+            '#contents yt-lockup-view-model',
+            'ytd-rich-grid-renderer yt-lockup-view-model',
+            // Subscriptions page
+            'ytd-section-list-renderer ytd-video-renderer',
+            'ytd-section-list-renderer yt-lockup-view-model',
+            'ytd-section-list-renderer ytd-rich-item-renderer',
+            // General fallbacks
+            'ytd-grid-video-renderer',
+            'ytd-rich-grid-video-renderer',
+            'ytd-shelf-renderer ytd-video-renderer',
+            'ytd-shelf-renderer yt-lockup-view-model',
+            'ytd-search-result-renderer' // Potential new element
+        ].join(', ');
 
-		// Filter to exclude Shorts
-		return videoElements.filter(el => !this.isVideoRendererShorts(el));
-	}
+        const videoElements = this.findVideoElements(document);
+        videoElements.forEach(element => {
+            this.checkAndBlockVideo(element);
+        });
+    }
 
-    // New helper method to detect Shorts within ytd-video-renderer
+    isVideoElement(element) {
+        if (!element.matches)
+            return false;
+
+        return (
+            element.matches('yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-rich-grid-video-renderer, ytd-search-result-renderer') &&
+            !this.isShortsOrIrrelevantElement(element) // Exclude Shorts and irrelevant sections
+        );
+    }
+
+    findVideoElements(container) {
+        const selectors = [
+            'yt-lockup-view-model',
+            'ytd-video-renderer',
+            'ytd-compact-video-renderer',
+            'ytd-rich-item-renderer',
+            'ytd-grid-video-renderer',
+            'ytd-rich-grid-video-renderer',
+            'ytd-search-result-renderer'
+        ].join(', ');
+
+        let videoElements = [];
+        selectors.split(', ').forEach(selector => {
+            try {
+                const elements = container.querySelectorAll(selector);
+                videoElements = videoElements.concat(Array.from(elements));
+            } catch (e) {
+                logDebug('YouTube Video Blocker: Invalid selector:', selector, e);
+            }
+        });
+
+        // Filter to exclude Shorts and irrelevant sections
+        return videoElements.filter(el => !this.isShortsOrIrrelevantElement(el));
+    }
+
+    // Method to detect Shorts within ytd-video-renderer
     isVideoRendererShorts(videoElement) {
         // Check for Shorts thumbnail link
         if (videoElement.querySelector('a[href*="/shorts/"]')) {
@@ -851,31 +870,8 @@ class YouTubeVideoBlocker {
         return false;
     }
 
-    // Helper method to detect Shorts within ytd-video-renderer
-    isVideoRendererShorts(videoElement) {
-        // Check for Shorts thumbnail link
-        if (videoElement.querySelector('a[href*="/shorts/"]')) {
-            return true;
-        }
-
-        // Check for Shorts overlay indicator
-        const timeOverlay = videoElement.querySelector('ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]');
-        if (timeOverlay) {
-            return true;
-        }
-
-        // Check for hide-time-status attribute (often used with Shorts)
-        const hideTimeStatus = videoElement.querySelector('ytd-thumbnail-overlay-time-status-renderer[hide-time-status]');
-        if (hideTimeStatus && hideTimeStatus.hasAttribute('overlay-style') &&
-            hideTimeStatus.getAttribute('overlay-style') === 'SHORTS') {
-            return true;
-        }
-
-        return false;
-    }
-
-    isShortsElement(element) {
-        // Check various Shorts-related selectors, be specific
+    // Modified to include irrelevant search sections
+    isShortsOrIrrelevantElement(element) {
         if (!element.matches)
             return false;
 
@@ -884,7 +880,8 @@ class YouTubeVideoBlocker {
             return false;
         }
 
-        return (
+        // Check for Shorts elements
+        const isShorts = (
             // Sidebar Shorts link (specific guide entry)
             (element.matches('ytd-guide-entry-renderer') &&
                 element.querySelector('yt-formatted-string') &&
@@ -913,14 +910,31 @@ class YouTubeVideoBlocker {
 
             // Direct Shorts links (not within large containers)
             (element.matches('a[href*="/shorts/"]') && !element.closest('ytd-search, ytd-page-manager')));
-    }
 
-    findShortsElements(container) {
+        if (this.removeShorts && isShorts) {
+            return true;
+        }
+
+        // Check for irrelevant search sections (only on search pages)
+        if (this.cleanSearchResults && location.href.includes('/results?search_query=')) {
+            const isIrrelevant = (
+                // Horizontal card lists (e.g., "People also search for")
+                element.matches('ytd-horizontal-card-list-renderer') ||
+                // Shelves with specific titles like "Previously watched" or "From related searches"
+                (element.matches('ytd-shelf-renderer') &&
+                    element.querySelector('h2')?.textContent.match(/People also search for|Previously watched|From related searches/i)));
+            return isIrrelevant;
+        }
+
+        return false;
+    }
+    
+    // Modified to include irrelevant search sections
+    findShortsAndIrrelevantElements(container) {
         const selectors = [
-            // Specific Shorts navigation entries
+            // Shorts selectors
             'ytd-mini-guide-entry-renderer[aria-label="Shorts"]',
             'ytd-mini-guide-entry-renderer a[title="Shorts"]',
-
             // Shorts shelves and sections on Home/Subscriptions
             'ytd-rich-section-renderer a[href*="/shorts/"]',
             'ytd-rich-section-renderer grid-shelf-view-model.ytGridShelfViewModelHost',
@@ -933,35 +947,43 @@ class YouTubeVideoBlocker {
             'ytd-video-renderer[is-shorts]',
             'ytd-compact-video-renderer a[href*="/shorts/"]',
             '[data-shorts-shelf]',
-
             // Direct Shorts links (exclude main page containers)
             'a[href*="/shorts/"]:not(ytd-search a):not(ytd-page-manager a)'
         ];
 
-        let shortsElements = [];
+        // Irrelevant search section selectors (only apply on search pages)
+        if (this.cleanSearchResults && location.href.includes('/results?search_query=')) {
+            selectors.push(
+                'ytd-horizontal-card-list-renderer',
+                'ytd-shelf-renderer' // Will filter by title in isShortsOrIrrelevantElement
+            );
+        }
+
+        let elements = [];
         selectors.forEach(selector => {
             try {
-                const elements = container.querySelectorAll(selector);
-                shortsElements = shortsElements.concat(Array.from(elements));
+                const foundElements = container.querySelectorAll(selector);
+                elements = elements.concat(Array.from(foundElements));
             } catch (e) {
                 logDebug('YouTube Video Blocker: Invalid selector:', selector, e);
             }
         });
 
         // Special handling for Shorts link in sidebar
+        if (this.removeShorts) {
         const guideEntries = container.querySelectorAll('ytd-guide-entry-renderer');
         guideEntries.forEach(entry => {
             const titleElement = entry.querySelector('yt-formatted-string');
             if (titleElement && titleElement.textContent.trim() === 'Shorts') {
-                shortsElements.push(entry);
-            }
+                    elements.push(entry);
+                }
         });
 
         // Check ytd-video-renderer and ytd-compact-video-renderer for Shorts indicators
         const videoRenderers = container.querySelectorAll('ytd-video-renderer, ytd-compact-video-renderer');
         videoRenderers.forEach(video => {
             if (this.isVideoRendererShorts && this.isVideoRendererShorts(video)) {
-                shortsElements.push(video);
+                elements.push(video);
             }
         });
 
@@ -969,19 +991,22 @@ class YouTubeVideoBlocker {
         const richSections = container.querySelectorAll('ytd-rich-section-renderer');
         richSections.forEach(section => {
             if (section.querySelector('a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost')) {
-                shortsElements.push(section);
+                elements.push(section);
             }
         });
-
-        return shortsElements;
     }
 
+        // Filter to include only valid Shorts or irrelevant elements
+        return elements.filter(el => this.isShortsOrIrrelevantElement(el)); 
+    }
+
+    // Handle both Shorts and irrelevant search sections
     removeShortsElement(element) {
-        // Find the appropriate element to remove, be precise
+        // Find the appropriate element to remove
         let elementToRemove = element;
 
-        // For sidebar Shorts link, remove only the guide entry
-        if (element.matches('ytd-guide-entry-renderer') || element.closest('ytd-guide-entry-renderer')) {
+        // For Shorts: Sidebar Shorts link
+        if (this.removeShorts && (element.matches('ytd-guide-entry-renderer') || element.closest('ytd-guide-entry-renderer'))) {
             const guideEntry = element.closest('ytd-guide-entry-renderer') || element;
             const titleElement = guideEntry.querySelector('yt-formatted-string');
             if (titleElement && titleElement.textContent.trim() === 'Shorts') {
@@ -990,8 +1015,8 @@ class YouTubeVideoBlocker {
                 return;
             }
         }
-        // For mini guide (collapsed sidebar)
-        else if (element.matches('ytd-mini-guide-entry-renderer') || element.closest('ytd-mini-guide-entry-renderer')) {
+        // For Shorts: Mini guide (collapsed sidebar)
+        else if (this.removeShorts && (element.matches('ytd-mini-guide-entry-renderer') || element.closest('ytd-mini-guide-entry-renderer'))) {
             const miniGuideEntry = element.closest('ytd-mini-guide-entry-renderer') || element;
             if (miniGuideEntry.getAttribute('aria-label') === 'Shorts' ||
                 miniGuideEntry.querySelector('a[title="Shorts"]')) {
@@ -1000,8 +1025,8 @@ class YouTubeVideoBlocker {
                 return;
             }
         }
-        // For Home/Subscriptions page Shorts sections
-        else if (element.matches('ytd-rich-section-renderer') || element.closest('ytd-rich-section-renderer')) {
+        // For Shorts: Home/Subscriptions page Shorts sections
+        else if (this.removeShorts && (element.matches('ytd-rich-section-renderer') || element.closest('ytd-rich-section-renderer'))) {
             const richSection = element.closest('ytd-rich-section-renderer') || element;
             if (richSection.querySelector('a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost')) {
                 elementToRemove = richSection;
@@ -1009,33 +1034,48 @@ class YouTubeVideoBlocker {
                 return;
             }
         }
-        // For individual ytd-video-renderer or ytd-compact-video-renderer that contains Shorts
-        else if (element.matches('ytd-video-renderer') || element.matches('ytd-compact-video-renderer')) {
+        // For Shorts: Individual ytd-video-renderer or ytd-compact-video-renderer that contains Shorts
+        else if (this.removeShorts && (element.matches('ytd-video-renderer') || element.matches('ytd-compact-video-renderer'))) {
             if (this.isVideoRendererShorts && this.isVideoRendererShorts(element)) {
                 elementToRemove = element;
             } else {
                 return;
             }
         }
-        // For Shorts shelves, remove the shelf container
-        else if (element.matches('grid-shelf-view-model') || element.closest('grid-shelf-view-model')) {
+        // For Shorts: Shorts shelves
+        else if (this.removeShorts && (element.matches('grid-shelf-view-model') || element.closest('grid-shelf-view-model'))) {
             elementToRemove = element.closest('grid-shelf-view-model') || element;
-        } else if (element.matches('ytd-rich-shelf-renderer[is-shorts-shelf]') || element.closest('ytd-rich-shelf-renderer[is-shorts-shelf]')) {
-            elementToRemove = element.closest('ytd-rich-shelf-renderer[is-shorts-shelf]') || element;
-        } else if (element.matches('ytd-reel-shelf-renderer') || element.closest('ytd-reel-shelf-renderer')) {
+        } else if (this.removeShorts && (element.matches('ytd-rich-shelf-renderer[is-shorts-shelf]') || element.closest('ytd-rich-shelf-renderer[is-shorts-shelf]'))) {
+            elementToRemove = element.closest('y td-rich-shelf-renderer[is-shorts-shelf]') || element;
+        } else if (this.removeShorts && (element.matches('ytd-reel-shelf-renderer') || element.closest('ytd-reel-shelf-renderer'))) {
             elementToRemove = element.closest('ytd-reel-shelf-renderer') || element;
         }
-        // For individual Shorts videos
-        else if (element.matches('ytd-reel-item-renderer') || element.closest('ytd-reel-item-renderer')) {
+        // For Shorts: Individual Shorts videos
+        else if (this.removeShorts && (element.matches('ytd-reel-item-renderer') || element.closest('ytd-reel-item-renderer'))) {
             elementToRemove = element.closest('ytd-reel-item-renderer') || element;
         }
-        // For individual Shorts links
-        else if (element.matches('a[href*="/shorts/"]')) {
+        // For Shorts: Individual Shorts links
+        else if (this.removeShorts && element.matches('a[href*="/shorts/"]')) {
             const videoContainer = element.closest('ytd-video-renderer, ytd-compact-video-renderer, yt-lockup-view-model');
             if (videoContainer) {
                 elementToRemove = videoContainer;
             } else {
                 elementToRemove = element;
+            }
+        }
+        // For Search Results: Horizontal card lists (e.g., "People also search for")
+        else if (this.cleanSearchResults && location.href.includes('/results?search_query=') &&
+            element.matches('ytd-horizontal-card-list-renderer')) {
+            elementToRemove = element;
+        }
+        // For Search Results: Shelves with specific titles
+        else if (this.cleanSearchResults && location.href.includes('/results?search_query=') &&
+            element.matches('ytd-shelf-renderer')) {
+            const titleElement = element.querySelector('h2');
+            if (titleElement && titleElement.textContent.match(/People also search for|Previously watched|From related searches/i)) {
+                elementToRemove = element;
+            } else {
+                return;
             }
         }
         // Don't remove large containers
@@ -1045,24 +1085,26 @@ class YouTubeVideoBlocker {
         }
 
         if (elementToRemove && elementToRemove.parentNode && elementToRemove !== document.body) {
-            logDebug('YouTube Video Blocker: Removing Shorts element:', elementToRemove.tagName, elementToRemove.className);
+            logDebug('YouTube Video Blocker: Removing element:', elementToRemove.tagName, elementToRemove.className);
             elementToRemove.remove();
         }
     }
 
+    // Remove Shorts and irrelevant Search sections
     removeAllShorts() {
-        if (!this.removeShorts || !this.extensionEnabled)
+        if (!this.removeShorts && !this.cleanSearchResults || !this.extensionEnabled)
             return;
 
-        logDebug('YouTube Video Blocker: Removing all existing Shorts');
+        logDebug('YouTube Video Blocker: Removing all existing Shorts and irrelevant search sections');
 
-        // Find and remove all existing Shorts elements
-        const shortsElements = this.findShortsElements(document);
-        shortsElements.forEach(element => {
+        // Find and remove all existing Shorts and irrelevant search elements
+        const elements = this.findShortsAndIrrelevantElements(document);
+        elements.forEach(element => {
             this.removeShortsElement(element);
         });
 
         // Also remove Shorts navigation link specifically
+        if (this.removeShorts) {
         const shortsNavLinks = document.querySelectorAll('ytd-guide-entry-renderer a[title*="Shorts"], ytd-guide-entry-renderer[title*="Shorts"]');
         shortsNavLinks.forEach(link => {
             const parentEntry = link.closest('ytd-guide-entry-renderer');
@@ -1071,6 +1113,7 @@ class YouTubeVideoBlocker {
                 parentEntry.remove();
             }
         });
+    }
     }
 
     unblockAllVideos() {
@@ -1159,6 +1202,7 @@ class YouTubeVideoBlocker {
         this.unblockedVideoIds.clear();
         logDebug('YouTube Video Blocker: Cleared unblocked video IDs');
     }
+
     stop() {
         if (this.observer) {
             this.observer.disconnect();
@@ -1169,9 +1213,9 @@ class YouTubeVideoBlocker {
         if (this.shortsObserver) {
             this.shortsObserver.disconnect();
         }
-		if (this.videoObserver) {
-			this.videoObserver.disconnect();
-		}
+        if (this.videoObserver) {
+            this.videoObserver.disconnect();
+        }
         // Remove temporary CSS
         const tempStyle = document.getElementById('youtube-video-blocker-temp');
         if (tempStyle)

@@ -1013,6 +1013,15 @@ class YouTubeVideoBlocker {
                 return;
             }
         }
+        // For Notifications: Handle ytd-notification-renderer
+        else if (this.removeShorts && (element.matches('ytd-notification-renderer') || element.closest('ytd-notification-renderer'))) {
+            const notification = element.closest('ytd-notification-renderer') || element;
+            if (notification.querySelector('a[href*="/shorts/"]')) {
+                elementToRemove = notification;
+            } else {
+                return;
+            }
+        }
         // For Shorts: Home/Subscriptions page Shorts sections
         else if (this.removeShorts && (element.matches('ytd-rich-section-renderer') || element.closest('ytd-rich-section-renderer'))) {
             const richSection = element.closest('ytd-rich-section-renderer') || element;

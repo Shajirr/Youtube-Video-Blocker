@@ -17,9 +17,9 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         this.elements.removeShorts.checked = newValue;
         logDebug('YouTube Video Blocker: Remove Shorts changed via storage to:', newValue);
     }
-    if (namespace === 'sync' && changes.cleanSearchResults && this.elements && this.elements.cleanSearchResults) {
-        const newValue = changes.cleanSearchResults.newValue === true || changes.cleanSearchResults.newValue === false ? changes.cleanSearchResults.newValue : false;
-        this.elements.cleanSearchResults.checked = newValue;
+    if (namespace === 'sync' && changes.removeIrrelevantElements && this.elements && this.elements.removeIrrelevantElements) {
+        const newValue = changes.removeIrrelevantElements.newValue === true || changes.removeIrrelevantElements.newValue === false ? changes.removeIrrelevantElements.newValue : false;
+        this.elements.removeIrrelevantElements.checked = newValue;
         logDebug('YouTube Video Blocker: Clean Search Results changed via storage to:', newValue);
     }
 });
@@ -50,16 +50,18 @@ class OptionsManager {
             debugMode: document.getElementById('debugMode'),
             blockingRules: document.getElementById('blockingRules'),
             blockedVideoIds: document.getElementById('blockedVideoIds'),
+            blockedChannelNames: document.getElementById('blockedChannelNames'),
             testTitles: document.getElementById('testTitles'),
             showPlaceholders: document.getElementById('showPlaceholders'),
             removeShorts: document.getElementById('removeShorts'),
-            cleanSearchResults: document.getElementById('cleanSearchResults'),
+            removeIrrelevantElements: document.getElementById('removeIrrelevantElements'),
             saveBtn: document.getElementById('saveBtn'),
             testBtn: document.getElementById('testBtn'),
             resetBtn: document.getElementById('resetBtn'),
             statusMessage: document.getElementById('statusMessage'),
             titleRuleCount: document.getElementById('titleRuleCount'),
             blockedIdCount: document.getElementById('blockedIdCount'),
+            blockedChannelCount: document.getElementById('blockedChannelCount'),
             blockedCount: document.getElementById('blockedCount'),
             themeToggle: document.getElementById('themeToggle'),
             tabs: document.querySelectorAll('.tab'),
@@ -76,16 +78,17 @@ class OptionsManager {
         this.updateStats();
     }
 
-    async loadSettings() {
+async loadSettings() {
         try {
             const result = await chrome.storage.sync.get([
                         'blockingRules',
                         'blockedVideoIds',
+                        'blockedChannelNames',
                         'blockedVideosCount',
                         'theme',
                         'showPlaceholders',
                         'removeShorts',
-                        'cleanSearchResults'
+                        'removeIrrelevantElements'
                     ]);
             const debugResult = await chrome.storage.local.get(['DEBUG']);
 
@@ -98,9 +101,9 @@ class OptionsManager {
             this.elements.removeShorts.checked = removeShortsEnabled;
             logDebug('YouTube Video Blocker: Loaded removeShorts:', removeShortsEnabled);
 
-            const cleanSearchResultsEnabled = result.cleanSearchResults === true || result.cleanSearchResults === false ? result.cleanSearchResults : false;
-            this.elements.cleanSearchResults.checked = cleanSearchResultsEnabled;
-            logDebug('YouTube Video Blocker: Loaded cleanSearchResults:', cleanSearchResultsEnabled);
+            const removeIrrelevantElementsEnabled = result.removeIrrelevantElements === true || result.removeIrrelevantElements === false ? result.removeIrrelevantElements : false;
+            this.elements.removeIrrelevantElements.checked = removeIrrelevantElementsEnabled;
+            logDebug('YouTube Video Blocker: Loaded removeIrrelevantElements:', removeIrrelevantElementsEnabled);
             
             if (result.blockingRules) {
                 this.elements.blockingRules.value = result.blockingRules.join('\n');
@@ -108,6 +111,10 @@ class OptionsManager {
 
             if (result.blockedVideoIds) {
                 this.elements.blockedVideoIds.value = result.blockedVideoIds.map(entry => `${entry.id}: ${entry.title}`).join('\n');
+            }
+
+            if (result.blockedChannelNames) {
+                this.elements.blockedChannelNames.value = result.blockedChannelNames.join('\n');
             }
 
             if (result.blockedVideosCount) {
@@ -129,7 +136,7 @@ class OptionsManager {
             }
 
             document.body.classList.add('theme-loaded'); // Reveal page
-			logDebug('YouTube Video Blocker: All settings loaded:', result, debugResult);
+            logDebug('YouTube Video Blocker: All settings loaded:', result, debugResult);
         } catch (error) {
             console.error('Error loading settings:', error);
             this.showStatus('Error loading settings', 'error');
@@ -143,9 +150,10 @@ class OptionsManager {
         this.elements.resetBtn.addEventListener('click', () => this.resetCounters());
         this.elements.blockingRules.addEventListener('input', () => this.updateStats());
         this.elements.blockedVideoIds.addEventListener('input', () => this.updateStats());
+        this.elements.blockedChannelNames.addEventListener('input', () => this.updateStats());
         this.elements.showPlaceholders.addEventListener('change', () => this.saveShowPlaceholders());
         this.elements.removeShorts.addEventListener('change', () => this.saveRemoveShorts());
-        this.elements.cleanSearchResults.addEventListener('change', () => this.saveCleanSearchResults());
+        this.elements.removeIrrelevantElements.addEventListener('change', () => this.saveremoveIrrelevantElements());
         this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
         this.elements.debugMode.addEventListener('change', () => this.saveDebugMode());
 
@@ -156,6 +164,10 @@ class OptionsManager {
             saveTimeout = setTimeout(() => this.saveRules(true), 2000);
         });
         this.elements.blockedVideoIds.addEventListener('input', () => {
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => this.saveRules(true), 2000);
+        });
+		this.elements.blockedChannelNames.addEventListener('input', () => {
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => this.saveRules(true), 2000);
         });
@@ -218,17 +230,19 @@ class OptionsManager {
         .filter(entry => entry);
     }
 
-    updateStats() {
+updateStats() {
         const titleRules = this.parseRules(this.elements.blockingRules.value);
         const blockedVideoIds = this.elements.blockedVideoIds.value
             .split('\n')
             .map(line => line.split(':')[0].trim())
             .filter(id => id && id.match(/^[a-zA-Z0-9_-]{11}$/));
+        const blockedChannelNames = this.parseRules(this.elements.blockedChannelNames.value);
         this.elements.titleRuleCount.textContent = titleRules.length;
         this.elements.blockedIdCount.textContent = blockedVideoIds.length;
+        this.elements.blockedChannelCount.textContent = blockedChannelNames.length;
     }
 
-    async saveRules(autoSave = false) {
+	async saveRules(autoSave = false) {
         try {
             const rules = this.parseRules(this.elements.blockingRules.value);
             const blockedVideoIds = this.elements.blockedVideoIds.value
@@ -241,10 +255,12 @@ class OptionsManager {
                     return null;
                 })
                 .filter(entry => entry);
+            const blockedChannelNames = this.parseRules(this.elements.blockedChannelNames.value);
 
             await chrome.storage.sync.set({
                 blockingRules: rules,
-                blockedVideoIds
+                blockedVideoIds,
+                blockedChannelNames
             });
 
             this.updateStats();
@@ -277,12 +293,12 @@ class OptionsManager {
         }
     }
 
-    async saveCleanSearchResults() {
+    async saveremoveIrrelevantElements() {
         try {
-            const enabled = this.elements.cleanSearchResults.checked;
-            await chrome.storage.sync.set({ cleanSearchResults: enabled });
+            const enabled = this.elements.removeIrrelevantElements.checked;
+            await chrome.storage.sync.set({ removeIrrelevantElements: enabled });
             this.showStatus(`Clean Search Results ${enabled ? 'enabled' : 'disabled'}`, 'success');
-            logDebug('YouTube Video Blocker: Saved cleanSearchResults:', enabled);
+            logDebug('YouTube Video Blocker: Saved removeIrrelevantElements:', enabled);
         } catch (error) {
             console.error('Error saving clean search results setting:', error);
             this.showStatus('Error saving clean search results setting', 'error');

@@ -32,11 +32,7 @@
   "content_scripts": [
     {
 	"matches": [
-        "*://*.youtube.com/watch*",
-        "*://*.youtube.com/feed/subscriptions",
-        "*://*.youtube.com/results*",
-        "*://youtube.com/",
-        "*://www.youtube.com/"
+        "*://*.youtube.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

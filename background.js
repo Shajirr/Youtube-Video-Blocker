@@ -4,20 +4,20 @@
 
 let DEBUG = false; // default fallback
 let removeShorts = false; // Default fallback for Shorts removal
-let cleanSearchResults = false; // Default fallback for Clean Search Results
+let removeIrrelevantElements = false; // Default fallback
 
 // Load initial settings
 async function loadSettings() {
     try {
-        const result = await chrome.storage.sync.get(['removeShorts', 'cleanSearchResults']);
+        const result = await chrome.storage.sync.get(['removeShorts', 'removeIrrelevantElements']);
 		const debugResult = await chrome.storage.local.get(['DEBUG']);
 		
         removeShorts = result.removeShorts === true || result.removeShorts === false ? result.removeShorts : false;
-        cleanSearchResults = result.cleanSearchResults === true || result.cleanSearchResults === false ? result.cleanSearchResults : false;
+        removeIrrelevantElements = result.removeIrrelevantElements === true || result.removeIrrelevantElements === false ? result.removeIrrelevantElements : false;
         DEBUG = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
         logDebug('YouTube Video Blocker: Loaded settings:', {
             removeShorts,
-            cleanSearchResults,
+            removeIrrelevantElements,
             DEBUG
         });
     } catch (error) {
@@ -44,41 +44,92 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         removeShorts = changes.removeShorts.newValue === true || changes.removeShorts.newValue === false ? changes.removeShorts.newValue : false;
         logDebug('YouTube Video Blocker: Remove Shorts changed to:', removeShorts);
     }
-    if (namespace === 'sync' && changes.cleanSearchResults) {
-        cleanSearchResults = changes.cleanSearchResults.newValue === true || changes.cleanSearchResults.newValue === false ? changes.cleanSearchResults.newValue : false;
-        logDebug('YouTube Video Blocker: Clean Search Results changed to:', cleanSearchResults);
+    if (namespace === 'sync' && changes.removeIrrelevantElements) {
+        removeIrrelevantElements = changes.removeIrrelevantElements.newValue === true || changes.removeIrrelevantElements.newValue === false ? changes.removeIrrelevantElements.newValue : false;
+        logDebug('YouTube Video Blocker: Clean Search Results changed to:', removeIrrelevantElements);
     }
 });
 
 // YouTube Video Blocker Background Script
 chrome.runtime.onInstalled.addListener(() => {
-    logDebug('YouTube Video Blocker: Setting up context menu');
-    // Remove existing menu to prevent duplicate ID error
-    chrome.contextMenus.remove('block-youtube-video', () => {
-        // Ignore error if menu doesn't exist
-        if (chrome.runtime.lastError) {
-            logDebug('YouTube Video Blocker: No existing context menu to remove');
-        }
-        // Create or recreate the context menu
-        chrome.contextMenus.create({
-            id: 'block-youtube-video',
-            title: 'Block video',
-            contexts: ['link'],
-            documentUrlPatterns: [
-                '*://*.youtube.com/*' // Allow context menu on all YouTube pages
-            ],
-            targetUrlPatterns: [
-                '*://*.youtube.com/watch?v=*', // Watch URLs
-                '*://*.youtube.com/shorts/*' // Shorts URLs
-            ]
+    logDebug('YouTube Video Blocker: Setting up context menus');
+	
+	// Remove only our specific menus to prevent duplicate ID errors
+	chrome.contextMenus.remove('block-youtube-video', () => {});
+	chrome.contextMenus.remove('block-youtube-channel', () => {});
+	chrome.contextMenus.remove('unblock-youtube-channel', () => {});
+	chrome.contextMenus.remove('block-youtube-channel-link', () => {});
+    chrome.contextMenus.remove('unblock-youtube-channel-link', () => {});
+
+	// Create menus after removal
+	setTimeout(() => {
+		chrome.contextMenus.create({
+			id: 'block-youtube-video',
+			title: 'Block video',
+			contexts: ['link'],
+			documentUrlPatterns: [
+				'*://*.youtube.com/*' // Allow context menu on all YouTube pages
+			],
+			targetUrlPatterns: [
+				'*://*.youtube.com/watch?v=*', // Watch URLs
+				'*://*.youtube.com/shorts/*' // Shorts URLs
+			]
+		}, () => {
+			if (chrome.runtime.lastError) {
+				console.error('Error creating context menu:', chrome.runtime.lastError);
+			}
+		});
+		
+		chrome.contextMenus.create({
+            id: 'block-youtube-channel',
+            title: 'Block Channel',
+            contexts: ['page', 'selection', 'image', 'link'],
+            documentUrlPatterns: ['*://*.youtube.com/@*']
         }, () => {
             if (chrome.runtime.lastError) {
-                console.error('Error creating context menu:', chrome.runtime.lastError);
-            } else {
-                logDebug('YouTube Video Blocker: Context menu created successfully');
+                logDebug('YouTube Video Blocker: Error creating channel block menu:', chrome.runtime.lastError);
             }
         });
-    });
+		
+		chrome.contextMenus.create({
+            id: 'unblock-youtube-channel',
+            title: 'Unblock Channel',
+            contexts: ['page', 'selection', 'image', 'link'],
+            documentUrlPatterns: ['*://*.youtube.com/@*']
+        }, () => {
+            if (chrome.runtime.lastError) {
+                logDebug('YouTube Video Blocker: Error creating channel unblock menu:', chrome.runtime.lastError);
+            } else {
+                logDebug('YouTube Video Blocker: Context menus created successfully');
+            }
+        });
+		
+		chrome.contextMenus.create({
+                id: 'block-youtube-channel-link',
+                title: 'Block Channel',
+                contexts: ['link'],
+                documentUrlPatterns: ['*://*.youtube.com/*'],
+                targetUrlPatterns: ['*://*.youtube.com/@*']
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    logDebug('YouTube Video Blocker: Error creating channel block link menu:', chrome.runtime.lastError);
+                }
+            });
+
+		chrome.contextMenus.create({
+			id: 'unblock-youtube-channel-link',
+			title: 'Unblock Channel',
+			contexts: ['link'],
+			documentUrlPatterns: ['*://*.youtube.com/*'],
+			targetUrlPatterns: ['*://*.youtube.com/@*']
+		}, () => {
+			if (chrome.runtime.lastError) {
+				logDebug('YouTube Video Blocker: Error creating channel unblock link menu:', chrome.runtime.lastError);
+			} else {
+				logDebug('YouTube Video Blocker: Context menus created successfully');
+			}
+		});
+	}, 100); // Small delay to ensure removal completes first
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -96,6 +147,36 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
                 console.warn('YouTube Video Blocker: Failed to block video, response:', response);
             }
         });
+    } else if (info.menuItemId === 'block-youtube-channel' || info.menuItemId === 'unblock-youtube-channel') {
+        chrome.tabs.sendMessage(tab.id, {
+            action: 'getChannelNameFromPage'
+        }, (response) => {
+            if (response && response.channelName) {
+                const action = info.menuItemId === 'block-youtube-channel' ? 'blockChannel' : 'unblockChannel';
+                chrome.tabs.sendMessage(tab.id, {
+                    action: action,
+                    channelName: response.channelName
+                });
+            } else {
+				console.warn('YouTube Video Blocker: Failed to get channel name from channel page:', response);
+			}
+        });
+    } else if (info.menuItemId === 'block-youtube-channel-link' || info.menuItemId === 'unblock-youtube-channel-link') {
+		logDebug('YouTube Video Blocker: Context menu clicked for channel URL:', info.linkUrl);
+		chrome.tabs.sendMessage(tab.id, {
+			action: 'getChannelNameFromLink',
+			url: info.linkUrl
+		}, (response) => {
+			if (response && response.channelName) {
+				const action = info.menuItemId === 'block-youtube-channel-link' ? 'blockChannel' : 'unblockChannel';
+				chrome.tabs.sendMessage(tab.id, {
+					action: action,
+					channelName: response.channelName
+				});
+			} else {
+				console.warn('YouTube Video Blocker: Failed to get channel name from link:', response);
+			}
+		});
     }
 });
 

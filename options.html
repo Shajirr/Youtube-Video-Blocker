@@ -357,8 +357,9 @@
         <div class="section">
             <div class="section-title">Blocking Options</div>
             <div class="tabs">
-                <div class="tab active" data-tab="title">Video Title</div>
-                <div class="tab" data-tab="id">Video ID</div>
+                <div class="tab active" data-tab="title">Video Titles</div>
+                <div class="tab" data-tab="id">Video IDs</div>
+				<div class="tab" data-tab="channel">Channels Names</div>
             </div>
             <div class="tab-content active" id="title-tab">
                 <div class="form-group">
@@ -392,6 +393,22 @@
                     </div>
                 </div>
             </div>
+			<div class="tab-content" id="channel-tab">
+				<div class="form-group">
+					<label for="blockedChannelNames">Blocked Channel Names (one per line):</label>
+					<textarea 
+						id="blockedChannelNames" 
+						class="textarea" 
+						placeholder="Enter channel names to block...&#10;Example:&#10;Clownfish TV&#10;Shiio"
+					></textarea>
+					<div class="help-text">
+						• Each channel name should be on a separate line<br>
+						• Channel names are case-insensitive<br>
+						• Videos from these channels will be blocked<br>
+						• Empty lines are ignored
+					</div>
+				</div>
+			</div>
 
             <div class="form-group">
                 <label for="showPlaceholders">
@@ -402,9 +419,9 @@
                     <input type="checkbox" id="removeShorts">
                     Remove Shorts
                 </label>
-                <label for="cleanSearchResults">
-                    <input type="checkbox" id="cleanSearchResults">
-                    Clean Search Results
+                <label for="removeIrrelevantElements">
+                    <input type="checkbox" id="removeIrrelevantElements">
+                    Remove irrelevant elements
                 </label>
 				<label for="debugMode">
                     <input type="checkbox" id="debugMode">
@@ -414,15 +431,19 @@
             <div class="stats">
                 <div class="stat-item">
                     <div class="stat-number" id="titleRuleCount">0</div>
-                    <div class="stat-label">Title Rules</div>
+                    <div class="stat-label">Video Title Rules</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-number" id="blockedIdCount">0</div>
-                    <div class="stat-label">Blocked IDs</div>
+                    <div class="stat-label">Blocked Video IDs</div>
                 </div>
+				<div class="stat-item">
+					<div class="stat-number" id="blockedChannelCount">0</div>
+					<div class="stat-label">Blocked Channels</div>
+				</div>
                 <div class="stat-item">
                     <div class="stat-number" id="blockedCount">0</div>
-                    <div class="stat-label">Videos Blocked</div>
+                    <div class="stat-label">Blocked Videos Counter</div>
                 </div>
             </div>
             <div class="button-group">

@@ -746,7 +746,8 @@ class YouTubeVideoBlocker {
             const trimmedRule = rule.trim();
             return trimmedRule && title.toLowerCase().includes(trimmedRule.toLowerCase());
         }) || (videoId && this.blockedVideoIds.some(entry => entry.id === videoId)) ||
-		   (channelName && this.blockedChannelNames.some(blockedChannel => blockedChannel === channelName));
+		   (channelName && this.blockedChannelNames.some(blockedChannel => 
+       blockedChannel.toLowerCase() === channelName.toLowerCase()));
 
         if (shouldBlock) {
             logDebug(`YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ''}${channelName ? `, Channel: ${channelName}` : ''}`);
@@ -1235,9 +1236,9 @@ class YouTubeVideoBlocker {
             const isIrrelevant = (
                 // Horizontal card lists (e.g., "People also search for")
                 element.matches('ytd-horizontal-card-list-renderer') ||
-                // Shelves with specific titles like "Previously watched" or "From related searches"
+                // Shelves with specific titles like "Previously watched", "From related searches", "Channels new to you"
                 (element.matches('ytd-shelf-renderer') &&
-                    element.querySelector('h2')?.textContent.match(/People also search for|Previously watched|From related searches/i)));
+                    element.querySelector('#title')?.textContent.match(/People also search for|Previously watched|Channels new to you|From related searches/i)));
             return isIrrelevant;
         }
 
@@ -1403,8 +1404,8 @@ class YouTubeVideoBlocker {
         // For irrelevant elements: Shelves with specific titles
         else if (this.removeIrrelevantElements && location.href.includes('/results?search_query=') &&
             element.matches('ytd-shelf-renderer')) {
-            const titleElement = element.querySelector('h2');
-            if (titleElement && titleElement.textContent.match(/People also search for|Previously watched|From related searches/i)) {
+            const titleElement = element.querySelector('#title');
+            if (titleElement && titleElement.textContent.match(/People also search for|Previously watched|Channels new to you|From related searches/i)) {
                 elementToRemove = element;
             } else {
                 return;

@@ -584,6 +584,48 @@ class YouTubeVideoBlocker {
 
 				// Keep message channel open for async storage
 				return true;
+			} else if (message.action === 'getChannelNameFromVideoLink' && message.url) {
+				logDebug('YouTube Video Blocker: Received getChannelNameFromVideoLink message for URL:', message.url);
+				
+				// Extract video ID from URL
+				const videoIdMatch = message.url.match(/v=([a-zA-Z0-9_-]{11})|\/shorts\/([a-zA-Z0-9_-]{11})/);
+				if (!videoIdMatch) {
+					logDebug('YouTube Video Blocker: No video ID found in URL');
+					sendResponse({ channelName: null });
+					return true;
+				}
+				
+				const videoId = videoIdMatch[1] || videoIdMatch[2];
+				logDebug('YouTube Video Blocker: Looking for video ID:', videoId);
+				
+				// Find the video element with this ID
+				const linkSelectors = [
+					`a[href*="/watch?v=${videoId}"]`,
+					`a[href*="/shorts/${videoId}"]`
+				];
+				
+				let channelName = null;
+				for (const selector of linkSelectors) {
+					const linkElements = document.querySelectorAll(selector);
+					
+					for (const linkElement of linkElements) {
+						// Find the video container
+						const videoContainer = linkElement.closest('yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer');
+						if (videoContainer) {
+							channelName = this.extractChannelName(videoContainer);
+							if (channelName) {
+								logDebug('YouTube Video Blocker: Extracted channel name from video:', channelName);
+								break;
+							}
+						}
+					}
+					
+					if (channelName) break;
+				}
+				
+				logDebug('YouTube Video Blocker: Final channel name result for video:', channelName);
+				sendResponse({ channelName: channelName });
+				return true;
 			}
         });
     }

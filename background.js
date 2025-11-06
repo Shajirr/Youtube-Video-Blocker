@@ -61,11 +61,11 @@ chrome.runtime.onInstalled.addListener(() => {
 	chrome.contextMenus.remove('block-youtube-channel-link', () => {});
     chrome.contextMenus.remove('unblock-youtube-channel-link', () => {});
 
-	// Create menus after removal
+	// Create menus
 	setTimeout(() => {
 		chrome.contextMenus.create({
 			id: 'block-youtube-video',
-			title: 'Block video',
+			title: '\u200BBlock Video',
 			contexts: ['link'],
 			documentUrlPatterns: [
 				'*://*.youtube.com/*' // Allow context menu on all YouTube pages
@@ -76,7 +76,24 @@ chrome.runtime.onInstalled.addListener(() => {
 			]
 		}, () => {
 			if (chrome.runtime.lastError) {
-				console.error('Error creating context menu:', chrome.runtime.lastError);
+				console.error('YouTube Video Blocker: Error creating block video menu:', chrome.runtime.lastError);
+			}
+		});
+		
+		chrome.contextMenus.create({
+			id: 'block-youtube-channel-from-video',
+			title: 'Block Channel',
+			contexts: ['link'],
+			documentUrlPatterns: [
+				'*://*.youtube.com/*'
+			],
+			targetUrlPatterns: [
+				'*://*.youtube.com/watch?v=*',
+				'*://*.youtube.com/shorts/*'
+			]
+		}, () => {
+			if (chrome.runtime.lastError) {
+				console.error('YouTube Video Blocker: Error creating channel block from video menu:', chrome.runtime.lastError);
 			}
 		});
 		
@@ -177,7 +194,28 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 				console.warn('YouTube Video Blocker: Failed to get channel name from link:', response);
 			}
 		});
-    }
+    } else if (info.menuItemId === 'block-youtube-channel-from-video') {
+		logDebug('YouTube Video Blocker: Block channel from video context menu clicked for URL:', info.linkUrl);
+		chrome.tabs.sendMessage(tab.id, {
+			action: 'getChannelNameFromVideoLink',
+			url: info.linkUrl
+		}, (response) => {
+			if (response && response.channelName) {
+				chrome.tabs.sendMessage(tab.id, {
+					action: 'blockChannel',
+					channelName: response.channelName
+				}, (blockResponse) => {
+					if (chrome.runtime.lastError) {
+						console.error('Error blocking channel:', chrome.runtime.lastError);
+					} else if (blockResponse && blockResponse.success) {
+						logDebug('YouTube Video Blocker: Channel blocked successfully:', blockResponse);
+					}
+				});
+			} else {
+				console.warn('YouTube Video Blocker: Failed to get channel name from video link:', response);
+			}
+		});
+	}
 });
 
 // Redirect from Shorts URLs and Subscriptions Shorts to Subscriptions

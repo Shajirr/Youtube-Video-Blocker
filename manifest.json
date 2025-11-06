@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YouTube Video Blocker",
-  "version": "2025.9.15",
-  "description": "Block YouTube videos based on titles / IDs",
+  "version": "2025.11.06",
+  "description": "Block YouTube videos based on title / ID / Channel name",
   
   "browser_specific_settings": {
     "gecko": {

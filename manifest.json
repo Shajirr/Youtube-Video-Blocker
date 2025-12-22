@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Video Blocker",
-  "version": "2025.11.12",
+  "version": "2025.12.23",
   "description": "Block YouTube videos based on title / ID / Channel name",
   
   "browser_specific_settings": {
@@ -22,7 +22,8 @@
   ],
   
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["lib/compromise-two.mjs","background.js"],
+	"type": "module"
   },
   
   "host_permissions": [

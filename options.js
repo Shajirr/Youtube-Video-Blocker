@@ -2,7 +2,7 @@
 
 let DEBUG;
 
-// Listen for debug setting changes
+// Listen for settings changes
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local' && changes.DEBUG) {
         const newValue = changes.DEBUG.newValue === true || changes.DEBUG.newValue === false ? changes.DEBUG.newValue : false;
@@ -21,6 +21,11 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         const newValue = changes.removeIrrelevantElements.newValue === true || changes.removeIrrelevantElements.newValue === false ? changes.removeIrrelevantElements.newValue : false;
         this.elements.removeIrrelevantElements.checked = newValue;
         logDebug('YouTube Video Blocker: Clean Search Results changed via storage to:', newValue);
+    }
+	if (namespace === 'sync' && changes.blockClickbaitVaguetitles && this.elements && this.elements.blockClickbaitVaguetitles) {
+        const newValue = changes.blockClickbaitVaguetitles.newValue === true || changes.blockClickbaitVaguetitles.newValue === false ? changes.blockClickbaitVaguetitles.newValue : false;
+        this.elements.blockClickbaitVaguetitles.checked = newValue;
+        logDebug('YouTube Video Blocker: Block clickbait / vague titles changed via storage to:', newValue);
     }
 });
 
@@ -55,6 +60,7 @@ class OptionsManager {
             showPlaceholders: document.getElementById('showPlaceholders'),
             removeShorts: document.getElementById('removeShorts'),
             removeIrrelevantElements: document.getElementById('removeIrrelevantElements'),
+			blockClickbaitVaguetitles: document.getElementById('blockClickbaitVaguetitles'),
             saveBtn: document.getElementById('saveBtn'),
             testBtn: document.getElementById('testBtn'),
             resetBtn: document.getElementById('resetBtn'),
@@ -88,7 +94,8 @@ async loadSettings() {
                         'theme',
                         'showPlaceholders',
                         'removeShorts',
-                        'removeIrrelevantElements'
+                        'removeIrrelevantElements',
+						'blockClickbaitVaguetitles'
                     ]);
             const debugResult = await chrome.storage.local.get(['DEBUG']);
 
@@ -104,6 +111,10 @@ async loadSettings() {
             const removeIrrelevantElementsEnabled = result.removeIrrelevantElements === true || result.removeIrrelevantElements === false ? result.removeIrrelevantElements : false;
             this.elements.removeIrrelevantElements.checked = removeIrrelevantElementsEnabled;
             logDebug('YouTube Video Blocker: Loaded removeIrrelevantElements:', removeIrrelevantElementsEnabled);
+			
+			const blockClickbaitVaguetitlesEnabled = result.blockClickbaitVaguetitles === true || result.blockClickbaitVaguetitles === false ? result.blockClickbaitVaguetitles : false;
+            this.elements.blockClickbaitVaguetitles.checked = blockClickbaitVaguetitlesEnabled;
+            logDebug('YouTube Video Blocker: Loaded blockClickbaitVaguetitles:', blockClickbaitVaguetitlesEnabled);
             
             if (result.blockingRules) {
                 this.elements.blockingRules.value = result.blockingRules.join('\n');
@@ -154,6 +165,7 @@ async loadSettings() {
         this.elements.showPlaceholders.addEventListener('change', () => this.saveShowPlaceholders());
         this.elements.removeShorts.addEventListener('change', () => this.saveRemoveShorts());
         this.elements.removeIrrelevantElements.addEventListener('change', () => this.saveremoveIrrelevantElements());
+		this.elements.blockClickbaitVaguetitles.addEventListener('change', () => this.saveblockClickbaitVaguetitles());
         this.elements.themeToggle.addEventListener('click', () => this.toggleTheme());
         this.elements.debugMode.addEventListener('change', () => this.saveDebugMode());
 
@@ -302,6 +314,18 @@ updateStats() {
         } catch (error) {
             console.error('Error saving clean search results setting:', error);
             this.showStatus('Error saving clean search results setting', 'error');
+        }
+    }
+	
+	async saveblockClickbaitVaguetitles() {
+        try {
+            const enabled = this.elements.blockClickbaitVaguetitles.checked;
+            await chrome.storage.sync.set({ blockClickbaitVaguetitles: enabled });
+            this.showStatus(`Block clickbait / vague titles ${enabled ? 'enabled' : 'disabled'}`, 'success');
+            logDebug('YouTube Video Blocker: Saved blockClickbaitVaguetitles:', enabled);
+        } catch (error) {
+            console.error('Error saving block clickbait / vague titles setting:', error);
+            this.showStatus('Error saving block clickbait / vague titles setting', 'error');
         }
     }
     

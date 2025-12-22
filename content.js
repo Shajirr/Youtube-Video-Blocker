@@ -27,6 +27,24 @@ function debounce(func, wait) {
     };
 }
 
+// Call the real analyzeYTTitle() function from the background script
+async function analyzeYTTitle(title) {
+  console.log('Content script sending title:', title);
+  
+  try {
+    const result = await browser.runtime.sendMessage({
+      action: 'analyzeTitle',
+      title: title
+    });
+    
+    console.log('Content script received result:', result);
+    return result; // Returns {score, blocked, reasons}
+  } catch (error) {
+    console.error('Message error:', error);
+    return { score: 0, blocked: false, reasons: 'Error' };
+  }
+}
+
 class YouTubeVideoBlocker {
 
     constructor() {
@@ -36,6 +54,7 @@ class YouTubeVideoBlocker {
         this.showPlaceholders = true;
         this.removeShorts = false;
         this.removeIrrelevantElements = false;
+		this.blockClickbaitVaguetitles = false;
         this.theme = 'light';
         this.extensionEnabled = true;
         this.observer = null;
@@ -94,6 +113,11 @@ class YouTubeVideoBlocker {
                         this.stopElementsRemoval();
                     }
                 }
+				if (changes.blockClickbaitVaguetitles) {
+                    this.blockClickbaitVaguetitles = changes.blockClickbaitVaguetitles.newValue === true;
+                    logDebug('YouTube Video Blocker: blockClickbaitVaguetitles updated:', this.blockClickbaitVaguetitles);
+                    this.processAllVideos();
+                }
                 if (changes.theme) {
                     this.theme = changes.theme.newValue || 'light';
                     logDebug('YouTube Video Blocker: Theme updated:', this.theme);
@@ -128,6 +152,7 @@ class YouTubeVideoBlocker {
                         'showPlaceholders',
                         'removeShorts',
                         'removeIrrelevantElements',
+						'blockClickbaitVaguetitles',
                         'theme',
                         'extensionEnabled'
                     ]);
@@ -139,6 +164,7 @@ class YouTubeVideoBlocker {
             this.showPlaceholders = result.showPlaceholders !== false; // Default to true
             this.removeShorts = result.removeShorts === true || result.removeShorts === false ? result.removeShorts : false;
             this.removeIrrelevantElements = result.removeIrrelevantElements === true || result.removeIrrelevantElements === false ? result.removeIrrelevantElements : false; // Default to false
+			this.blockClickbaitVaguetitles = result.blockClickbaitVaguetitles === true || result.blockClickbaitVaguetitles === false ? result.blockClickbaitVaguetitles : false; // Default to false
             this.theme = result.theme || 'light';
             this.extensionEnabled = result.extensionEnabled !== false; // Default to true
             DEBUG = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
@@ -148,6 +174,7 @@ class YouTubeVideoBlocker {
                 showPlaceholders: this.showPlaceholders,
                 removeShorts: this.removeShorts,
                 removeIrrelevantElements: this.removeIrrelevantElements,
+				blockClickbaitVaguetitles: this.blockClickbaitVaguetitles,
                 theme: this.theme,
                 extensionEnabled: this.extensionEnabled,
                 DEBUG: DEBUG
@@ -159,6 +186,7 @@ class YouTubeVideoBlocker {
             this.showPlaceholders = true;
             this.removeShorts = false;
             this.removeIrrelevantElements = false;
+			this.blockClickbaitVaguetitles = false;
             this.theme = 'light';
             this.extensionEnabled = true;
         }
@@ -701,7 +729,7 @@ class YouTubeVideoBlocker {
         });
     }
 
-    checkAndBlockVideo(videoElement) {
+    async checkAndBlockVideo(videoElement) {
         const titleElement = videoElement.querySelector(
                 'a#video-title, #video-title, ' +
                 'h3.ytd-video-renderer a, ' +
@@ -784,12 +812,26 @@ class YouTubeVideoBlocker {
         if (videoElement.dataset?.blockerProcessed === 'blocked')
             return;
 
-        const shouldBlock = this.rules.some(rule => {
-            const trimmedRule = rule.trim();
-            return trimmedRule && title.toLowerCase().includes(trimmedRule.toLowerCase());
-        }) || (videoId && this.blockedVideoIds.some(entry => entry.id === videoId)) ||
-		   (channelName && this.blockedChannelNames.some(blockedChannel => 
-       blockedChannel.toLowerCase() === channelName.toLowerCase()));
+		let shouldBlock = false;
+		let blockedByClickbaitVaguetitles = false;
+
+		// Blocking clickbait / vague titles check
+		if (this.blockClickbaitVaguetitles){
+			const { blocked } = await analyzeYTTitle(title);
+			if (blocked){
+				shouldBlock = true;
+				blockedByClickbaitVaguetitles = true;
+			}
+		}
+
+		if (!shouldBlock){
+			shouldBlock = this.rules.some(rule => {
+				const trimmedRule = rule.trim();
+				return trimmedRule && title.toLowerCase().includes(trimmedRule.toLowerCase());
+			}) || (videoId && this.blockedVideoIds.some(entry => entry.id === videoId)) ||
+			   (channelName && this.blockedChannelNames.some(blockedChannel => 
+			blockedChannel.toLowerCase() === channelName.toLowerCase()));
+		}
 
         if (shouldBlock) {
             logDebug(`YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ''}${channelName ? `, Channel: ${channelName}` : ''}`);
@@ -797,7 +839,7 @@ class YouTubeVideoBlocker {
                 videoElement.style.display = 'none';
                 this.removeVideo(videoElement, title);
             } else {
-                this.blockVideoWithPlaceholder(videoElement, title);
+                this.blockVideoWithPlaceholder(videoElement, title, blockedByClickbaitVaguetitles);
             }
             videoElement.dataset.blockerProcessed = 'blocked';
         } else {
@@ -805,7 +847,7 @@ class YouTubeVideoBlocker {
         }
     }
 
-    blockVideoWithPlaceholder(videoElement, title) {
+    blockVideoWithPlaceholder(videoElement, title, blockedByClickbaitVaguetitles) {
         const originalParent = videoElement.parentNode;
         const originalNextSibling = videoElement.nextSibling;
 
@@ -865,7 +907,13 @@ class YouTubeVideoBlocker {
         const messageDiv = document.createElement('div');
         messageDiv.style.fontWeight = '500';
         messageDiv.style.marginBottom = '4px';
-        messageDiv.textContent = '🚫 Video Blocked';
+		
+		if (blockedByClickbaitVaguetitles) {
+			messageDiv.textContent = '🚫 Blocked: Clickbait / Vague Title';
+			messageDiv.style.color = '#ff6b6b';  
+		} else {
+			messageDiv.textContent = '🚫 Video Blocked';
+		}
 
         // Create title div
         const titleDiv = document.createElement('div');

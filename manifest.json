@@ -1,56 +1,46 @@
 {
   "manifest_version": 3,
   "name": "YouTube Video Blocker",
-  "version": "2025.12.23",
+  "version": "2026.2.24",
   "description": "Block YouTube videos based on title / ID / Channel name",
-  
+
   "browser_specific_settings": {
     "gecko": {
       "id": "@youtube-video-blocker.shajirr",
-	  "data_collection_permissions": {
+      "data_collection_permissions": {
         "required": ["none"]
       }
     }
   },
-  
-  "permissions": [
-    "storage",
-    "activeTab",
-    "tabs",
-    "contextMenus",
-    "webNavigation"
-  ],
-  
+
+  "permissions": ["storage", "activeTab", "tabs", "contextMenus", "webNavigation"],
+
   "background": {
-    "scripts": ["lib/compromise-two.mjs","background.js"],
-	"type": "module"
+    "scripts": ["lib/compromise-two.mjs", "background.js"],
+    "type": "module"
   },
-  
-  "host_permissions": [
-    "*://*.youtube.com/*"
-  ],
-  
+
+  "host_permissions": ["*://*.youtube.com/*"],
+
   "content_scripts": [
     {
-	"matches": [
-        "*://*.youtube.com/*"
-      ],
+      "matches": ["*://*.youtube.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],
-  
+
   "options_ui": {
     "page": "options.html",
     "open_in_tab": true
   },
-  
+
   "action": {
     "default_popup": "popup.html",
     "default_title": "YouTube Video Blocker",
     "default_icon": "icon.svg"
   },
-  
+
   "icons": {
     "16": "icon.svg",
     "32": "icon.svg",

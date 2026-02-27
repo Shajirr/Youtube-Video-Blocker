@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Video Blocker",
-  "version": "2026.2.24",
+  "version": "2026.2.28",
   "description": "Block YouTube videos based on title / ID / Channel name",
 
   "browser_specific_settings": {

@@ -2,21 +2,16 @@
 
 let DEBUG = false; // default fallback
 
+const OBSERVER_LIFETIME = 5000;
+
 // Load debug setting asynchronously
-chrome.storage.local.get(["DEBUG"], (result) => {
+browser.storage.local.get(["DEBUG"], (result) => {
   DEBUG = result.DEBUG !== undefined ? result.DEBUG : false;
 });
 
 function logDebug(...args) {
   if (DEBUG) console.log(...args);
 }
-
-chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === "local" && changes.DEBUG) {
-    DEBUG = changes.DEBUG.newValue;
-    console.log("Debug mode changed to:", DEBUG);
-  }
-});
 
 function debounce(func, wait) {
   let timeout;
@@ -28,15 +23,15 @@ function debounce(func, wait) {
 
 // Call the real analyzeYTTitle() function from the background script
 async function analyzeYTTitle(title) {
-  console.log("Content script sending title:", title);
+  logDebug("YouTube Video Blocker: Sending title for analysis:", title);
 
   try {
     const result = await browser.runtime.sendMessage({
       action: "analyzeTitle",
-      title: title,
+      title: title
     });
 
-    console.log("Content script received result:", result);
+    //logDebug("YouTube Video Blocker: Received analysis result:", result);
     return result; // Returns {score, blocked, reasons}
   } catch (error) {
     console.error("Message error:", error);
@@ -45,6 +40,15 @@ async function analyzeYTTitle(title) {
 }
 
 class YouTubeVideoBlocker {
+  static TITLE_SELECTOR =
+    "a#video-title, #video-title, h3.ytd-video-renderer a, " +
+    ".ytd-video-meta-block #video-title, " +
+    '.yt-lockup-metadata-view-model__title span[role="text"], ' +
+    ".yt-lockup-metadata-view-model__title, h3 a, " +
+    "a.yt-lockup-metadata-view-model__title, #title-wrapper h3, .title, " +
+    'span.title, [id="video-title"], a#video-title-link, ' +
+    'h3.ytd-video-renderer, a[aria-label*="minutes"]';
+
   constructor() {
     this.rules = [];
     this.blockedVideoIds = []; // Array of { id: string, title: string }
@@ -55,12 +59,12 @@ class YouTubeVideoBlocker {
     this.blockClickbaitVaguetitles = false;
     this.theme = "light";
     this.extensionEnabled = true;
-    this.observer = null;
     this.parentObserver = null;
     this.videoObserver = null;
     this.instanceId = Date.now() + "-" + Math.random().toString(36).substring(2, 9); // Unique instance ID
     this.unblockedVideoIds = new Set(); // Per-tab list of unblocked video IDs
-    this.currentUrl = location.href;
+    this.clickbaitTitleCache = new Map(); // title -> result {score, blocked, reasons}
+    this.pendingObservers = new Map(); // videoElement -> observer
     this.init();
   }
 
@@ -76,16 +80,32 @@ class YouTubeVideoBlocker {
         if (changes.blockingRules) {
           this.rules = changes.blockingRules.newValue || [];
           logDebug("YouTube Video Blocker: Rules updated:", this.rules);
+          // Force re-process
+          document
+            .querySelectorAll('[data-blocker-processed="checked"]')
+            .forEach((el) => delete el.dataset.blockerProcessed);
           this.processAllVideos();
         }
-        if (changes.blockedVideoIds && changes.lastUpdateInstance?.newValue !== this.instanceId) {
+        if (changes.blockedVideoIds) {
+          // Build oldIds from the current local array (already updated by push() if
+          // this tab triggered the change) so cross-tab new IDs are hidden while
+          // own-tab new IDs are skipped
+          const oldIds = new Set(this.blockedVideoIds.map((e) => e.id));
           this.blockedVideoIds = changes.blockedVideoIds.newValue || [];
           logDebug("YouTube Video Blocker: Blocked video IDs updated:", this.blockedVideoIds);
-          this.processAllVideos();
+          // Hide the newly added IDs
+          this.blockedVideoIds.forEach((entry) => {
+            if (!oldIds.has(entry.id)) {
+              this.forceHideVideoById(entry.id);
+            }
+          });
         }
         if (changes.blockedChannelNames && changes.lastUpdateInstance?.newValue !== this.instanceId) {
           this.blockedChannelNames = changes.blockedChannelNames.newValue || [];
           logDebug("YouTube Video Blocker: Blocked channel names updated:", this.blockedChannelNames);
+          document
+            .querySelectorAll('[data-blocker-processed="checked"]')
+            .forEach((el) => delete el.dataset.blockerProcessed);
           this.processAllVideos();
         }
         if (changes.showPlaceholders) {
@@ -132,46 +152,39 @@ class YouTubeVideoBlocker {
           }
         }
       } else if (namespace === "local" && changes.DEBUG) {
-        DEBUG = changes.DEBUG.newValue === true || changes.DEBUG.newValue === false ? changes.DEBUG.newValue : false;
+        DEBUG = changes.DEBUG.newValue === true;
         logDebug("YouTube Video Blocker: Debug mode changed in content script to:", DEBUG);
       }
     }, 100);
 
-    chrome.storage.onChanged.addListener(debouncedOnStorageChange);
+    browser.storage.onChanged.addListener(debouncedOnStorageChange);
   }
 
   async loadSettings() {
     try {
-      const result = await chrome.storage.sync.get([
+      const result = await browser.storage.sync.get([
         "blockingRules",
         "blockedVideoIds",
         "blockedChannelNames",
-        "unblockedVideoIds",
         "showPlaceholders",
         "removeShorts",
         "removeIrrelevantElements",
         "blockClickbaitVaguetitles",
         "theme",
-        "extensionEnabled",
+        "extensionEnabled"
       ]);
-      const debugResult = await chrome.storage.local.get(["DEBUG"]);
+      const debugResult = await browser.storage.local.get(["DEBUG"]);
 
       this.rules = result.blockingRules || [];
       this.blockedVideoIds = result.blockedVideoIds || [];
       this.blockedChannelNames = result.blockedChannelNames || [];
       this.showPlaceholders = result.showPlaceholders !== false; // Default to true
-      this.removeShorts = result.removeShorts === true || result.removeShorts === false ? result.removeShorts : false;
-      this.removeIrrelevantElements =
-        result.removeIrrelevantElements === true || result.removeIrrelevantElements === false
-          ? result.removeIrrelevantElements
-          : false; // Default to false
-      this.blockClickbaitVaguetitles =
-        result.blockClickbaitVaguetitles === true || result.blockClickbaitVaguetitles === false
-          ? result.blockClickbaitVaguetitles
-          : false; // Default to false
+      this.removeShorts = result.removeShorts === true;
+      this.removeIrrelevantElements = result.removeIrrelevantElements === true;
+      this.blockClickbaitVaguetitles = result.blockClickbaitVaguetitles === true;
       this.theme = result.theme || "light";
       this.extensionEnabled = result.extensionEnabled !== false; // Default to true
-      DEBUG = debugResult.DEBUG === true || debugResult.DEBUG === false ? debugResult.DEBUG : false;
+      DEBUG = debugResult.DEBUG === true;
       logDebug("YouTube Video Blocker: Loaded settings in content script:", {
         rules: this.rules,
         blockedVideoIds: this.blockedVideoIds,
@@ -181,8 +194,13 @@ class YouTubeVideoBlocker {
         blockClickbaitVaguetitles: this.blockClickbaitVaguetitles,
         theme: this.theme,
         extensionEnabled: this.extensionEnabled,
-        DEBUG: DEBUG,
+        DEBUG: DEBUG
       });
+      // Force re-process on load
+      document
+        .querySelectorAll('[data-blocker-processed="checked"]')
+        .forEach((el) => delete el.dataset.blockerProcessed);
+      this.processAllVideos();
     } catch (error) {
       console.error("Error loading settings:", error);
       this.rules = [];
@@ -196,7 +214,7 @@ class YouTubeVideoBlocker {
     }
   }
 
-  // method to extract video ID:
+  // Method to extract video ID:
   extractVideoId(videoElement) {
     const linkElement = videoElement.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]');
     logDebug("YouTube Video Blocker: Found link element:", linkElement);
@@ -213,11 +231,46 @@ class YouTubeVideoBlocker {
     return null;
   }
 
+  forceHideVideoById(videoId) {
+    const selectors = [`a[href*="/watch?v=${videoId}"]`, `a[href*="/shorts/${videoId}"]`];
+
+    let foundTitle = null;
+
+    for (const sel of selectors) {
+      document.querySelectorAll(sel).forEach((link) => {
+        // Prefer the inner lockup for consistency; fall back to outer wrappers
+        // for older layouts where yt-lockup-view-model is absent.
+        const videoEl =
+          link.closest("yt-lockup-view-model") ||
+          link.closest(
+            "ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer"
+          );
+        if (videoEl && videoEl.dataset.blockerProcessed !== "blocked") {
+          // Extract title
+          const titleEl = videoEl.querySelector(YouTubeVideoBlocker.TITLE_SELECTOR);
+          if (titleEl && !foundTitle) {
+            foundTitle = titleEl.textContent.trim();
+          }
+
+          if (!this.showPlaceholders) {
+            this.hideVideoElement(videoEl);
+            videoEl.dataset.blockerProcessed = "blocked";
+          } else {
+            this.blockVideoWithPlaceholder(videoEl, foundTitle || "Manually blocked", "video");
+          }
+          logDebug(`YouTube Video Blocker: Force-hid video ID ${videoId}`);
+        }
+      });
+    }
+
+    return foundTitle;
+  }
+
   // Method to extract channel name:
   extractChannelName(videoElement) {
     // First try the attributed string format (recommendations section)
     const attributedChannelElement = videoElement.querySelector(
-      ".yt-core-attributed-string.yt-content-metadata-view-model__metadata-text",
+      ".yt-core-attributed-string.yt-content-metadata-view-model__metadata-text"
     );
 
     if (attributedChannelElement) {
@@ -258,7 +311,7 @@ class YouTubeVideoBlocker {
       ".ytd-channel-name yt-formatted-string",
       "#channel-name yt-formatted-string",
       ".ytd-video-meta-block #channel-name yt-formatted-string",
-      "yt-formatted-string.ytd-channel-name",
+      "yt-formatted-string.ytd-channel-name"
     ];
 
     for (const selector of fallbackSelectors) {
@@ -272,12 +325,12 @@ class YouTubeVideoBlocker {
       }
     }
 
-    logDebug("YouTube Video Blocker: No channel name found for video", videoElement);
+    //logDebug("YouTube Video Blocker: No channel name found for video", videoElement);
     return null;
   }
 
   setupMessageListener() {
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.action === "toggleExtension") {
         this.extensionEnabled = message.enabled !== false;
         logDebug("YouTube Video Blocker: Received toggle message, enabled:", this.extensionEnabled);
@@ -293,82 +346,37 @@ class YouTubeVideoBlocker {
         const videoIdMatch = message.url.match(/v=([a-zA-Z0-9_-]{11})/);
         if (!videoIdMatch) {
           console.warn("YouTube Video Blocker: Invalid video ID in URL:", message.url);
-          sendResponse({
-            success: false,
-            error: "Invalid video ID",
-          });
+          sendResponse({ success: false, error: "Invalid video ID" });
           return;
         }
 
         const videoId = videoIdMatch[1];
-        if (this.blockedVideoIds.some((entry) => entry.id === videoId)) {
-          logDebug("YouTube Video Blocker: Video ID already blocked:", videoId);
-          sendResponse({
-            success: false,
-            error: "Video already blocked",
-          });
-          return;
-        }
 
-        const linkElements = document.querySelectorAll(`a[href*="${message.url}"], a[href*="/watch?v=${videoId}"]`);
-        let title = null;
-        for (const link of linkElements) {
-          const parent = link.closest(
-            "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer",
-          );
-          if (parent) {
-            const titleElement = parent.querySelector(
-              '.yt-lockup-metadata-view-model__title span[role="text"], ' +
-                ".yt-lockup-metadata-view-model__title, " +
-                "h3 a, #video-title, " +
-                "a.yt-lockup-metadata-view-model__title, " +
-                "#title-wrapper h3, .title, " +
-                'span.title, [id="video-title"]',
-            );
-            if (titleElement) {
-              title = titleElement.textContent.trim();
-              logDebug("YouTube Video Blocker: Found title:", title);
-              break;
+        // Always try to hide it visually, even if already in list
+        const wasAlreadyBlocked = this.blockedVideoIds.some((entry) => entry.id === videoId);
+
+        // Find and hide immediately, get title
+        const foundTitle = this.forceHideVideoById(videoId);
+
+        if (!wasAlreadyBlocked) {
+          const title = foundTitle || "Unknown Title";
+          this.blockedVideoIds.push({ id: videoId, title });
+          browser.storage.sync.set(
+            {
+              blockedVideoIds: this.blockedVideoIds,
+              lastUpdateInstance: this.instanceId
+            },
+            () => {
+              logDebug("YouTube Video Blocker: Blocked video:", { id: videoId, title });
+              sendResponse({ success: true, id: videoId, title });
             }
-          }
+          );
+          return true;
+        } else {
+          logDebug("YouTube Video Blocker: Video ID already blocked:", videoId);
+          sendResponse({ success: true, id: videoId, alreadyBlocked: true });
+          return true;
         }
-
-        this.blockedVideoIds.push({
-          id: videoId,
-          title: title || "Unknown Title",
-        });
-        chrome.storage.sync.set(
-          {
-            blockedVideoIds: this.blockedVideoIds,
-            lastUpdateInstance: this.instanceId,
-          },
-          () => {
-            logDebug("YouTube Video Blocker: Blocked video:", {
-              id: videoId,
-              title: title || "Unknown Title",
-            });
-            // Process immediately and retry if needed
-            const attemptProcess = (attempt = 1, maxAttempts = 5) => {
-              const processed = this.processAllVideos({
-                targetVideoId: videoId,
-                force: true,
-              });
-              if (!processed && attempt < maxAttempts) {
-                logDebug(`YouTube Video Blocker: Video ID ${videoId} not found, retrying (${attempt}/${maxAttempts})`);
-                requestAnimationFrame(() => attemptProcess(attempt + 1, maxAttempts));
-              }
-            };
-            attemptProcess();
-            sendResponse({
-              success: true,
-              id: videoId,
-              title: title || "Unknown Title",
-            });
-          },
-        );
-
-        // Keep message channel open for async storage
-        return true;
       } else if (message.action === "blockChannel" && message.channelName) {
         logDebug("YouTube Video Blocker: Received blockChannel message for channel:", message.channelName);
 
@@ -376,32 +384,35 @@ class YouTubeVideoBlocker {
           logDebug("YouTube Video Blocker: Channel already blocked:", message.channelName);
           sendResponse({
             success: false,
-            error: "Channel already blocked",
+            error: "Channel already blocked"
           });
           return;
         }
 
         this.blockedChannelNames.push(message.channelName);
-        chrome.storage.sync.set(
+        browser.storage.sync.set(
           {
             blockedChannelNames: this.blockedChannelNames,
-            lastUpdateInstance: this.instanceId,
+            lastUpdateInstance: this.instanceId
           },
           () => {
             logDebug("YouTube Video Blocker: Blocked channel:", message.channelName);
-            this.processAllVideos({ force: true });
-            sendResponse({
-              success: true,
-              channelName: message.channelName,
-            });
-          },
+
+            // Force re-process so existing videos from this channel get hidden
+            document
+              .querySelectorAll('[data-blocker-processed="checked"]')
+              .forEach((el) => delete el.dataset.blockerProcessed);
+            this.processAllVideos();
+
+            sendResponse({ success: true, channelName: message.channelName });
+          }
         );
 
         return true;
       } else if (message.action === "getChannelNameFromPage") {
         logDebug("YouTube Video Blocker: Getting channel name from current page");
 
-        // Ensure we respond even if we don't find the channel name
+        // Ensure the response even if channel name was not found
         try {
           // Try multiple selectors for channel name on channel pages
           const channelNameSelectors = [
@@ -417,7 +428,7 @@ class YouTubeVideoBlocker {
             "ytd-channel-name #text",
             ".ytd-c4-tabbed-header-renderer #text",
             "h1.ytd-channel-name",
-            ".ytd-channel-header-renderer h1",
+            ".ytd-channel-header-renderer h1"
           ];
 
           let channelName = null;
@@ -455,7 +466,7 @@ class YouTubeVideoBlocker {
                         return NodeFilter.FILTER_REJECT;
                       }
                       return NodeFilter.FILTER_ACCEPT;
-                    },
+                    }
                   });
 
                   let textNode;
@@ -500,14 +511,14 @@ class YouTubeVideoBlocker {
           // Always send a response, even if channelName is null
           sendResponse({
             success: channelName !== null,
-            channelName: channelName,
+            channelName: channelName
           });
         } catch (error) {
           console.log("YouTube Video Blocker: Error extracting channel name:", error);
           sendResponse({
             success: false,
             channelName: null,
-            error: error.message,
+            error: error.message
           });
         }
 
@@ -531,7 +542,7 @@ class YouTubeVideoBlocker {
           `a[href*="${channelHandle}"]`,
           `a[href*="/@${channelHandleMatch[1]}"]`,
           `a[href="${message.url}"]`,
-          `a[href^="${message.url.split("?")[0]}"]`,
+          `a[href^="${message.url.split("?")[0]}"]`
         ];
 
         let channelName = null;
@@ -566,7 +577,7 @@ class YouTubeVideoBlocker {
             // Second try: Look for channel name in parent container
             if (!extractedName) {
               const videoContainer = linkElement.closest(
-                "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer",
+                "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer"
               );
               if (videoContainer) {
                 extractedName = this.extractChannelName(videoContainer);
@@ -594,16 +605,16 @@ class YouTubeVideoBlocker {
           logDebug("YouTube Video Blocker: Channel not in blocked list:", message.channelName);
           sendResponse({
             success: false,
-            error: "Channel not blocked",
+            error: "Channel not blocked"
           });
           return;
         }
 
         this.blockedChannelNames.splice(channelIndex, 1);
-        chrome.storage.sync.set(
+        browser.storage.sync.set(
           {
             blockedChannelNames: this.blockedChannelNames,
-            lastUpdateInstance: this.instanceId,
+            lastUpdateInstance: this.instanceId
           },
           () => {
             logDebug("YouTube Video Blocker: Unblocked channel:", message.channelName);
@@ -611,9 +622,9 @@ class YouTubeVideoBlocker {
             this.processAllVideos({ force: true });
             sendResponse({
               success: true,
-              channelName: message.channelName,
+              channelName: message.channelName
             });
-          },
+          }
         );
 
         // Keep message channel open for async storage
@@ -642,7 +653,7 @@ class YouTubeVideoBlocker {
           for (const linkElement of linkElements) {
             // Find the video container
             const videoContainer = linkElement.closest(
-              "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer",
+              "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer"
             );
             if (videoContainer) {
               channelName = this.extractChannelName(videoContainer);
@@ -678,8 +689,11 @@ class YouTubeVideoBlocker {
       if (!this.showPlaceholders) {
         const style = document.createElement("style");
         style.id = "youtube-video-blocker-temp";
-        style.textContent =
-          'yt-lockup-view-model:not([data-blocker-processed]), yt-lockup-view-model[data-blocker-processed="checked"], ytd-video-renderer:not([data-blocker-processed]), ytd-video-renderer[data-blocker-processed="checked"], ytd-compact-video-renderer:not([data-blocker-processed]), ytd-compact-video-renderer[data-blocker-processed="checked"], ytd-rich-item-renderer:not([data-blocker-processed]), ytd-rich-item-renderer[data-blocker-processed="checked"] { display: none; }';
+        style.textContent = `
+          [data-blocker-processed="blocked"] {
+            display: none !important;
+          }
+        `;
         document.head.appendChild(style);
       }
     };
@@ -708,17 +722,17 @@ class YouTubeVideoBlocker {
                 // Watch page containers with video content
                 ((node.matches("#related, ytd-watch-next-secondary-results-renderer") &&
                   node.querySelector(
-                    "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer",
+                    "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer"
                   )) ||
                   // Home page containers with video content
                   (node.matches("#contents, ytd-rich-grid-renderer") &&
                     node.querySelector(
-                      "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer",
+                      "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer"
                     )) ||
                   // Subscription page containers with video content
                   (node.matches("ytd-section-list-renderer, ytd-item-section-renderer") &&
                     node.querySelector(
-                      "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer",
+                      "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer"
                     )))
               ) {
                 containerChanged = true;
@@ -730,113 +744,167 @@ class YouTubeVideoBlocker {
 
         if (containerChanged) {
           logDebug("YouTube Video Blocker: Detected container change, re-attaching observer");
-          this.observer.disconnect();
           this.processAllVideos();
+          // Re-run element removal so ytd-rich-section-renderer sections that
+          // couldn't be identified before videos loaded are caught now.
+          if (this.removeShorts || this.removeIrrelevantElements) {
+            this.removeElements();
+          }
         }
-      }, 1000),
+      }, 1000)
     );
 
     // Start observing parent for container changes
     this.parentObserver.observe(document.body, {
       childList: true,
-      subtree: true,
+      subtree: true
     });
   }
 
+  startPendingObserver(videoElement) {
+    if (this.pendingObservers.has(videoElement)) return;
+
+    const debouncedCheck = debounce(() => {
+      if (!videoElement.isConnected) {
+        this.disconnectPendingObserver(videoElement);
+        return;
+      }
+      if (["checked", "blocked"].includes(videoElement.dataset?.blockerProcessed)) {
+        this.disconnectPendingObserver(videoElement);
+        return;
+      }
+      this.checkAndBlockVideo(videoElement);
+    }, 300);
+
+    const observer = new MutationObserver(debouncedCheck);
+
+    observer.observe(videoElement, {
+      childList: true,
+      subtree: true
+    });
+
+    this.pendingObservers.set(videoElement, observer);
+
+    // Safety timeout
+    const timeoutId = setTimeout(() => {
+      this.disconnectPendingObserver(videoElement);
+    }, OBSERVER_LIFETIME);
+
+    videoElement._pendingTimeout = timeoutId;
+  }
+
+  disconnectPendingObserver(videoElement) {
+    const observer = this.pendingObservers.get(videoElement);
+    if (observer) {
+      observer.disconnect();
+      this.pendingObservers.delete(videoElement);
+    }
+    if (videoElement._pendingTimeout) {
+      clearTimeout(videoElement._pendingTimeout);
+      delete videoElement._pendingTimeout;
+    }
+  }
+
   async checkAndBlockVideo(videoElement) {
-    const titleElement = videoElement.querySelector(
-      "a#video-title, #video-title, " +
-        "h3.ytd-video-renderer a, " +
-        ".ytd-video-meta-block #video-title, " +
-        '.yt-lockup-metadata-view-model__title span[role="text"], ' +
-        ".yt-lockup-metadata-view-model__title, " +
-        "h3 a, #video-title, " +
-        "a.yt-lockup-metadata-view-model__title, " +
-        "#title-wrapper h3, .title, " +
-        'span.title, [id="video-title"], ' +
-        "a#video-title-link, " +
-        ".ytd-video-meta-block #video-title, " +
-        "h3.ytd-video-renderer, " +
-        'a[aria-label*="minutes"]',
-    );
-
-    const channelName = this.extractChannelName(videoElement);
-    //logDebug('YouTube Video Blocker: Extracted channel name:', channelName);
-    if (!titleElement) {
-      logDebug("YouTube Video Blocker: Title element not found for video", videoElement);
-      logDebug("YouTube Video Blocker: Video element structure:", {
-        tagName: videoElement.tagName,
-        classList: Array.from(videoElement.classList),
-        innerHTML: videoElement.innerHTML.substring(0, 200) + "...",
-        parentStructure: videoElement.parentNode
-          ? {
-              tagName: videoElement.parentNode.tagName,
-              classList: Array.from(videoElement.parentNode.classList),
-            }
-          : null,
-      });
-      videoElement.dataset.blockerProcessed = "no-title";
+    // Skip if already finally decided
+    if (["checked", "blocked"].includes(videoElement.dataset?.blockerProcessed)) {
       return;
     }
 
-    const title = titleElement.textContent.trim();
-    if (!title) {
-      console.warn("YouTube Video Blocker: Empty title found for video", videoElement);
-      logDebug("YouTube Video Blocker: Video element structure:", {
-        tagName: videoElement.tagName,
-        classList: Array.from(videoElement.classList),
-        innerHTML: videoElement.innerHTML.substring(0, 200) + "...",
-        parentStructure: videoElement.parentNode
-          ? {
-              tagName: videoElement.parentNode.tagName,
-              classList: Array.from(videoElement.parentNode.classList),
-            }
-          : null,
-      });
-      videoElement.dataset.blockerProcessed = "no-title";
-      return;
-    }
-
+    // Extract videoId
     const linkElement = videoElement.querySelector(
-      'a[href*="/watch?v="], a[href*="/shorts/"], ' + '.yt-lockup-view-model__content-image[href*="/watch?v="]',
+      'a[href*="/watch?v="], a[href*="/shorts/"], ' + '.yt-lockup-view-model__content-image[href*="/watch?v="]'
     );
     let videoId = null;
     if (linkElement) {
       const href = linkElement.getAttribute("href");
       const videoIdMatch = href.match(/v=([a-zA-Z0-9_-]{11})|\/shorts\/([a-zA-Z0-9_-]{11})/);
-      if (videoIdMatch) videoId = videoIdMatch[1] || videoIdMatch[2];
+      if (videoIdMatch) {
+        videoId = videoIdMatch[1] || videoIdMatch[2];
+        logDebug("YouTube Video Blocker: Extracted videoID:", videoId);
+      }
     } else {
-      logDebug("YouTube Video Blocker: No link element found for video", videoElement);
-      logDebug("YouTube Video Blocker: Video element structure:", {
-        tagName: videoElement.tagName,
-        classList: Array.from(videoElement.classList),
-        innerHTML: videoElement.innerHTML.substring(0, 200) + "...",
-        parentStructure: videoElement.parentNode
-          ? {
-              tagName: videoElement.parentNode.tagName,
-              classList: Array.from(videoElement.parentNode.classList),
-            }
-          : null,
-      });
+      //logDebug("YouTube Video Blocker: No link element found for video", videoElement);
     }
 
+    // Mark as checked if the user manually unblocked the video via "Show anyway" button
     if (videoId && this.unblockedVideoIds.has(videoId)) {
       logDebug("YouTube Video Blocker: Skipping unblocked video ID:", videoId);
       videoElement.dataset.blockerProcessed = "checked";
       return;
     }
 
-    if (videoElement.dataset?.blockerProcessed === "blocked") return;
+    // Block by video ID
+    if (videoId && this.blockedVideoIds.some((entry) => entry.id === videoId)) {
+      logDebug(`YouTube Video Blocker: Blocking by video ID early: ${videoId}`);
+      if (!this.showPlaceholders) {
+        this.hideVideoElement(videoElement);
+      } else {
+        const title =
+          videoElement.querySelector(YouTubeVideoBlocker.TITLE_SELECTOR)?.textContent?.trim() || "Blocked Video";
+        this.blockVideoWithPlaceholder(videoElement, title, "video");
+      }
+      videoElement.dataset.blockerProcessed = "blocked";
+      this.disconnectPendingObserver(videoElement);
+      return;
+    }
+
+    // Extract channel name
+    const channelName = this.extractChannelName(videoElement);
+
+    // Block by channel name
+    if (channelName) {
+      logDebug("YouTube Video Blocker: Extracted channel name:", channelName);
+      if (this.blockedChannelNames.some((b) => b.toLowerCase() === channelName.toLowerCase())) {
+        logDebug(`YouTube Video Blocker: Blocking by channel: ${channelName}`);
+        if (!this.showPlaceholders) {
+          this.hideVideoElement(videoElement);
+        } else {
+          this.blockVideoWithPlaceholder(videoElement, channelName, "channel");
+        }
+        videoElement.dataset.blockerProcessed = "blocked";
+        this.disconnectPendingObserver(videoElement);
+        return;
+      }
+    }
+
+    const titleElement = videoElement.querySelector(YouTubeVideoBlocker.TITLE_SELECTOR);
+
+    if (!titleElement) {
+      videoElement.dataset.blockerProcessed = "pending";
+      this.startPendingObserver(videoElement);
+      //logDebug("YouTube Video Blocker: Title element not found for video", videoElement);
+      return;
+    }
+
+    const title = titleElement.textContent.trim();
+
+    if (!title) {
+      //logDebug("YouTube Video Blocker: Title not found for video", videoElement);
+      this.startPendingObserver(videoElement);
+      videoElement.dataset.blockerProcessed = "pending";
+      return;
+    }
 
     let shouldBlock = false;
-    let blockedByClickbaitVaguetitles = false;
 
     // Blocking clickbait / vague titles check
     if (this.blockClickbaitVaguetitles) {
-      const { blocked } = await analyzeYTTitle(title);
-      if (blocked) {
-        shouldBlock = true;
-        blockedByClickbaitVaguetitles = true;
+      const cacheKey = title;
+
+      // Check cache first by title
+      if (this.clickbaitTitleCache.has(cacheKey)) {
+        const cached = this.clickbaitTitleCache.get(cacheKey);
+        if (cached.blocked) {
+          shouldBlock = true;
+        }
+      } else {
+        // If not in cache, send the request
+        const result = await analyzeYTTitle(title);
+        this.clickbaitTitleCache.set(cacheKey, result);
+        if (result.blocked) {
+          shouldBlock = true;
+        }
       }
     }
 
@@ -849,19 +917,19 @@ class YouTubeVideoBlocker {
         (videoId && this.blockedVideoIds.some((entry) => entry.id === videoId)) ||
         (channelName &&
           this.blockedChannelNames.some(
-            (blockedChannel) => blockedChannel.toLowerCase() === channelName.toLowerCase(),
+            (blockedChannel) => blockedChannel.toLowerCase() === channelName.toLowerCase()
           ));
     }
 
     if (shouldBlock) {
       logDebug(
-        `YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ""}${channelName ? `, Channel: ${channelName}` : ""}`,
+        `YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ""}${channelName ? `, Channel: ${channelName}` : ""}`
       );
       if (!this.showPlaceholders) {
-        videoElement.style.display = "none";
-        this.removeVideo(videoElement, title);
+        this.hideVideoElement(videoElement);
+        this.incrementBlockedCount();
       } else {
-        this.blockVideoWithPlaceholder(videoElement, title, blockedByClickbaitVaguetitles);
+        this.blockVideoWithPlaceholder(videoElement, title, "clickbait");
       }
       videoElement.dataset.blockerProcessed = "blocked";
     } else {
@@ -869,13 +937,12 @@ class YouTubeVideoBlocker {
     }
   }
 
-  blockVideoWithPlaceholder(videoElement, title, blockedByClickbaitVaguetitles) {
+  blockVideoWithPlaceholder(videoElement, title, blockReason = "video") {
     const originalParent = videoElement.parentNode;
     const originalNextSibling = videoElement.nextSibling;
 
-    // Extract video ID BEFORE processing changes the DOM structure
+    // Extract video ID before processing changes the DOM structure
     const videoId = this.extractVideoId(videoElement);
-    logDebug("YouTube Video Blocker: Extracted video ID during blocking:", videoId);
 
     // Get the computed dimensions and styles before removing the element
     const computedStyle = window.getComputedStyle(videoElement);
@@ -893,16 +960,16 @@ class YouTubeVideoBlocker {
 
     // Base styles
     let placeholderStyles = `
-		padding: 16px;
-		margin: ${computedStyle.margin};
-		background: ${this.theme === "dark" ? "#2a2a2a" : "#f0f0f0"};
-		border: 2px dashed ${this.theme === "dark" ? "#555" : "#ccc"};
-		border-radius: 8px;
-		text-align: center;
-		color: ${this.theme === "dark" ? "#ccc" : "#666"};
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-		position: relative;
-		box-sizing: border-box;
+      padding: 16px;
+      margin: ${computedStyle.margin};
+      background: ${this.theme === "dark" ? "#2a2a2a" : "#f0f0f0"};
+      border: 2px dashed ${this.theme === "dark" ? "#555" : "#ccc"};
+      border-radius: 8px;
+      text-align: center;
+      color: ${this.theme === "dark" ? "#ccc" : "#666"};
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      position: relative;
+      box-sizing: border-box;
 	  `;
 
     // Handle width based on layout type
@@ -917,6 +984,17 @@ class YouTubeVideoBlocker {
 		  flex-grow: ${computedStyle.flexGrow};
 		  flex-shrink: ${computedStyle.flexShrink};
 		`;
+      // Apply full card height only in the Home/Subscriptions rich grid
+      const isRichGrid = !!videoElement.closest("ytd-rich-grid-renderer");
+      if (isRichGrid && elementRect.height > 0) {
+        placeholderStyles += `
+          min-height: ${elementRect.height}px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+        `;
+      }
     } else {
       // For list layouts, use full width
       placeholderStyles += `
@@ -926,25 +1004,60 @@ class YouTubeVideoBlocker {
 
     blockedDiv.style.cssText = placeholderStyles;
 
+    // Default font sizes (used on Recommendations and all non-grid pages)
+    let channelFontSize = "11px";
+    let titleFontSize = "12px";
+    let buttonFontSize = "11px";
+    // On Home/Subscriptions grid, sample sizes from a sibling video card instead
+    if (videoElement.closest("ytd-rich-grid-renderer")) {
+      const sibling = originalParent?.querySelector(
+        "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer"
+      );
+      if (sibling) {
+        const channelEl = sibling.querySelector(
+          ".yt-content-metadata-view-model__metadata-text, a.yt-core-attributed-string__link, " +
+            ".ytd-channel-name yt-formatted-string"
+        );
+        const titleEl = sibling.querySelector(YouTubeVideoBlocker.TITLE_SELECTOR);
+        if (channelEl) channelFontSize = window.getComputedStyle(channelEl).fontSize || channelFontSize;
+        if (titleEl) {
+          const s = window.getComputedStyle(titleEl).fontSize;
+          if (s) {
+            titleFontSize = parseInt(s) - 1 + "px";
+            buttonFontSize = parseInt(s) - 2 + "px";
+          }
+        }
+      }
+    }
+
     // Create container for blocked message
     const messageDiv = document.createElement("div");
     messageDiv.style.fontWeight = "500";
+    messageDiv.style.fontSize = channelFontSize;
     messageDiv.style.marginBottom = "4px";
 
-    if (blockedByClickbaitVaguetitles) {
+    if (blockReason === "channel") {
+      messageDiv.textContent = "🚫 Channel Blocked";
+      messageDiv.style.color = "#FFA014";
+    } else if (blockReason === "clickbait") {
       messageDiv.textContent = "🚫 Blocked: Clickbait / Vague Title";
       messageDiv.style.color = "#ff6b6b";
     } else {
       messageDiv.textContent = "🚫 Video Blocked";
     }
 
-    // Create title div
+    // Create title/channel div
     const titleDiv = document.createElement("div");
-    titleDiv.style.fontSize = "12px";
+    titleDiv.style.fontSize = titleFontSize;
     titleDiv.style.opacity = "0.7";
     titleDiv.style.wordBreak = "break-word";
     titleDiv.style.lineHeight = "1.3";
-    titleDiv.textContent = `Title: "${title}"`;
+
+    if (blockReason === "channel") {
+      titleDiv.textContent = `Channel: "${title}"`;
+    } else {
+      titleDiv.textContent = `Title: "${title}"`;
+    }
 
     // Create unblock button
     const unblockButton = document.createElement("button");
@@ -956,7 +1069,7 @@ class YouTubeVideoBlocker {
     unblockButton.style.borderRadius = "4px";
     unblockButton.style.color = "inherit";
     unblockButton.style.cursor = "pointer";
-    unblockButton.style.fontSize = "11px";
+    unblockButton.style.fontSize = buttonFontSize;
     unblockButton.textContent = "Show anyway";
 
     // Append elements to blockedDiv
@@ -1049,7 +1162,7 @@ class YouTubeVideoBlocker {
 
     // Remove video element and insert placeholder
     videoElement.remove();
-    if (originalParent.isConnected) {
+    if (originalParent && originalParent.isConnected) {
       originalParent.insertBefore(blockedDiv, originalNextSibling);
     } else {
       const fallbackParent =
@@ -1057,26 +1170,22 @@ class YouTubeVideoBlocker {
       fallbackParent.appendChild(blockedDiv);
       logDebug(
         "YouTube Video Blocker: Parent node disconnected, inserted placeholder to fallback parent:",
-        fallbackParent,
+        fallbackParent
       );
     }
 
-    chrome.storage.sync.get(["blockedVideosCount"], (result) => {
+    browser.storage.sync.get(["blockedVideosCount"], (result) => {
       const count = (result.blockedVideosCount || 0) + 1;
-      chrome.storage.sync.set({
-        blockedVideosCount: count,
+      browser.storage.sync.set({
+        blockedVideosCount: count
       });
     });
   }
 
-  // Update blocked videos count
-  removeVideo(videoElement, title) {
-    videoElement.remove();
-    chrome.storage.sync.get(["blockedVideosCount"], (result) => {
+  incrementBlockedCount() {
+    browser.storage.sync.get(["blockedVideosCount"], (result) => {
       const count = (result.blockedVideosCount || 0) + 1;
-      chrome.storage.sync.set({
-        blockedVideosCount: count,
-      });
+      browser.storage.sync.set({ blockedVideosCount: count });
     });
   }
 
@@ -1090,9 +1199,10 @@ class YouTubeVideoBlocker {
 
     // Set up observer for Shorts and irrelevant elements cleanup
     this.shortsObserver = new MutationObserver((mutations) => {
-      if (!this.extensionEnabled || (!this.removeShorts && !this.cleanSearchResults)) return;
+      if (!this.extensionEnabled || (!this.removeShorts && !this.removeIrrelevantElements)) return;
 
       let foundElements = false;
+      const parentsToRecheck = new Set();
       mutations.forEach((mutation) => {
         if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
           mutation.addedNodes.forEach((node) => {
@@ -1104,14 +1214,28 @@ class YouTubeVideoBlocker {
               }
               // Check within added nodes
               const elements = node.querySelectorAll ? this.findShortsAndIrrelevantElements(node) : [];
-
               if (elements.length > 0) {
                 foundElements = true;
                 elements.forEach((el) => this.removeShortsElement(el));
               }
+              // When a video item is added to the grid, re-check sibling
+              // ytd-rich-section-renderer elements that were skipped earlier
+              // because no videos existed in the parent yet.
+              if (this.removeIrrelevantElements && node.matches("ytd-rich-item-renderer") && node.parentElement) {
+                parentsToRecheck.add(node.parentElement);
+              }
             }
           });
         }
+      });
+      parentsToRecheck.forEach((parent) => {
+        parent.querySelectorAll("ytd-rich-section-renderer").forEach((section) => {
+          if (!section.dataset.blockerShortRemoved && this.isShowMoreSection(section)) {
+            logDebug("YouTube Video Blocker: Removing Show more/less section (deferred, sibling videos now present)");
+            this.removeShortsElement(section);
+            foundElements = true;
+          }
+        });
       });
 
       if (foundElements) {
@@ -1122,7 +1246,7 @@ class YouTubeVideoBlocker {
     // Observe the entire document
     this.shortsObserver.observe(document.body, {
       childList: true,
-      subtree: true,
+      subtree: true
     });
     logDebug("YouTube Video Blocker: Element observer started");
   }
@@ -1175,60 +1299,14 @@ class YouTubeVideoBlocker {
     // Observe the entire document for videos
     this.videoObserver.observe(document.body, {
       childList: true,
-      subtree: true,
+      subtree: true
     });
-  }
-
-  stopVideoBlocking() {
-    if (this.videoObserver) {
-      this.videoObserver.disconnect();
-      this.videoObserver = null;
-      logDebug("YouTube Video Blocker: Stopped video blocking observer");
-    }
   }
 
   processAllVideos() {
     if (!this.extensionEnabled) return;
 
     logDebug("YouTube Video Blocker: Processing all existing videos");
-
-    const selectors = [
-      // Search page - results
-      "#contents.ytd-item-section-renderer ytd-video-renderer",
-      "ytd-item-section-renderer #contents ytd-video-renderer",
-      "#contents.ytd-item-section-renderer yt-lockup-view-model",
-      "ytd-item-section-renderer #contents yt-lockup-view-model",
-      "ytd-search ytd-video-renderer",
-      "ytd-search yt-lockup-view-model",
-      // Watch page - recommendations section
-      "#related yt-lockup-view-model",
-      "#items yt-lockup-view-model",
-      "ytd-watch-next-secondary-results-renderer yt-lockup-view-model",
-      "ytd-item-section-renderer yt-lockup-view-model",
-      "#related ytd-video-renderer",
-      "#items ytd-video-renderer",
-      "ytd-watch-next-secondary-results-renderer ytd-video-renderer",
-      "ytd-item-section-renderer ytd-video-renderer",
-      "#related ytd-compact-video-renderer",
-      "#items ytd-compact-video-renderer",
-      "ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer",
-      "ytd-item-section-renderer ytd-compact-video-renderer",
-      // Home page - main grid
-      "#contents ytd-rich-item-renderer",
-      "ytd-rich-grid-renderer ytd-rich-item-renderer",
-      "#contents yt-lockup-view-model",
-      "ytd-rich-grid-renderer yt-lockup-view-model",
-      // Subscriptions page
-      "ytd-section-list-renderer ytd-video-renderer",
-      "ytd-section-list-renderer yt-lockup-view-model",
-      "ytd-section-list-renderer ytd-rich-item-renderer",
-      // General fallbacks
-      "ytd-grid-video-renderer",
-      "ytd-rich-grid-video-renderer",
-      "ytd-shelf-renderer ytd-video-renderer",
-      "ytd-shelf-renderer yt-lockup-view-model",
-      "ytd-search-result-renderer", // Potential new element
-    ].join(", ");
 
     const videoElements = this.findVideoElements(document);
     videoElements.forEach((element) => {
@@ -1238,37 +1316,61 @@ class YouTubeVideoBlocker {
 
   isVideoElement(element) {
     if (!element.matches) return false;
+    if (this.isShortsOrIrrelevantElement(element)) return false;
 
-    return (
-      element.matches(
-        "yt-lockup-view-model, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-rich-grid-video-renderer, ytd-search-result-renderer",
-      ) && !this.isShortsOrIrrelevantElement(element) // Exclude Shorts and irrelevant sections
-    );
+    // Always target yt-lockup-view-model — present on all modern pages.
+    // Outer wrappers (ytd-rich-item-renderer etc.) contain it as a descendant
+    // and are excluded to avoid double-processing the same video.
+    if (element.matches("yt-lockup-view-model")) return true;
+
+    // Fallback for older layouts that don't use yt-lockup-view-model
+    if (
+      element.matches("ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer") &&
+      !element.querySelector("yt-lockup-view-model")
+    )
+      return true;
+
+    return false;
   }
 
   findVideoElements(container) {
-    const selectors = [
-      "yt-lockup-view-model",
-      "ytd-video-renderer",
-      "ytd-compact-video-renderer",
-      "ytd-rich-item-renderer",
-      "ytd-grid-video-renderer",
-      "ytd-rich-grid-video-renderer",
-      "ytd-search-result-renderer",
-    ].join(", ");
+    // Primary: yt-lockup-view-model is the consistent inner video element on all
+    // modern YouTube pages (Home, Subscriptions, Search, Watch, Recommendations).
+    const primary = Array.from(container.querySelectorAll("yt-lockup-view-model"));
 
-    let videoElements = [];
-    selectors.split(", ").forEach((selector) => {
-      try {
-        const elements = container.querySelectorAll(selector);
-        videoElements = videoElements.concat(Array.from(elements));
-      } catch (e) {
-        logDebug("YouTube Video Blocker: Invalid selector:", selector, e);
-      }
-    });
+    // Fallback: older-layout elements only when they don't contain a lockup inside,
+    // so the same video is never double-processed via both outer and inner selectors.
+    const fallback = Array.from(
+      container.querySelectorAll("ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer")
+    ).filter((el) => !el.querySelector("yt-lockup-view-model"));
 
-    // Filter to exclude Shorts and irrelevant sections
-    return videoElements.filter((el) => !this.isShortsOrIrrelevantElement(el));
+    return [...primary, ...fallback].filter((el) => !this.isShortsOrIrrelevantElement(el));
+  }
+
+  // Hides a video element and its outer ytd-rich-item-renderer grid wrapper (if any)
+  // so the grid reflows correctly when placeholders are disabled.
+  hideVideoElement(videoElement) {
+    videoElement.style.setProperty("display", "none", "important");
+    videoElement.offsetHeight; // force reflow
+    const gridWrapper = videoElement.closest("ytd-rich-item-renderer");
+    if (gridWrapper) {
+      gridWrapper.style.setProperty("display", "none", "important");
+    }
+  }
+
+  // Returns true if this ytd-rich-section-renderer is a removable "Show more/less"
+  // shelf. Identify it negatively: keep any section that contains a chip/filter
+  // bar (Latest/All switcher on Subscriptions) or a title header. Remove the rest
+  // that appear after video items are present in the grid.
+  isShowMoreSection(element) {
+    // Never remove sections that contain a shelf (e.g. Latest/All switcher on Subscriptions)
+    if (element.querySelector("ytd-shelf-renderer")) return false;
+
+    const parent = element.parentElement;
+    if (!parent) return false;
+    // ytd-rich-item-renderer may have been replaced by .youtube-video-blocked
+    // placeholders if videos were blocked, so check for both.
+    return !!(parent.querySelector("ytd-rich-item-renderer") || parent.querySelector(".youtube-video-blocked"));
   }
 
   // Method to detect Shorts within ytd-video-renderer
@@ -1280,7 +1382,7 @@ class YouTubeVideoBlocker {
 
     // Check for Shorts overlay indicator
     const timeOverlay = videoElement.querySelector(
-      'ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]',
+      'ytd-thumbnail-overlay-time-status-renderer[overlay-style="SHORTS"]'
     );
     if (timeOverlay) {
       return true;
@@ -1305,6 +1407,22 @@ class YouTubeVideoBlocker {
       return false;
     }
 
+    // Remove "Show more/less" expandable shelves — identified by having video items
+    // already present in the same parent container
+    if (
+      this.removeIrrelevantElements &&
+      element.matches("ytd-rich-section-renderer") &&
+      this.isShowMoreSection(element)
+    ) {
+      logDebug("YouTube Video Blocker: Removing Show more/less rich section");
+      return true;
+    }
+
+    // Prevent re-processing already removed Shorts
+    if (element.dataset?.blockerShortRemoved === "true") {
+      return false;
+    }
+
     // Avoid matching large page containers
     if (element.matches("ytd-search, ytd-page-manager, body, html")) {
       logDebug("YouTube Video Blocker: Skipping large container:", element.tagName);
@@ -1323,7 +1441,7 @@ class YouTubeVideoBlocker {
       // Shorts shelves on Home/Subscriptions pages
       (element.matches("ytd-rich-section-renderer") &&
         element.querySelector(
-          'a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost',
+          'a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost'
         )) ||
       element.matches("grid-shelf-view-model.ytGridShelfViewModelHost") ||
       element.matches("ytd-rich-shelf-renderer[is-shorts-shelf]") ||
@@ -1358,7 +1476,7 @@ class YouTubeVideoBlocker {
           element
             .querySelector("#title")
             ?.textContent.match(
-              /People also search for|Previously watched|Channels new to you|From related searches/i,
+              /People also search for|Previously watched|Channels new to you|From related searches/i
             ));
       return isIrrelevant;
     }
@@ -1381,13 +1499,14 @@ class YouTubeVideoBlocker {
       "grid-shelf-view-model.ytGridShelfViewModelHost",
       "ytd-rich-shelf-renderer[is-shorts-shelf]",
       "ytd-rich-shelf-renderer[is-shorts]",
+      "ytd-rich-section-renderer",
       "ytd-reel-shelf-renderer",
       "ytd-reel-item-renderer",
       "ytd-video-renderer[is-shorts]",
       'ytd-compact-video-renderer a[href*="/shorts/"]',
       "[data-shorts-shelf]",
       // Direct Shorts links (exclude main page containers)
-      'a[href*="/shorts/"]:not(ytd-search a):not(ytd-page-manager a)',
+      'a[href*="/shorts/"]:not(ytd-search a):not(ytd-page-manager a)'
     ];
 
     // Irrelevant section selectors
@@ -1397,7 +1516,7 @@ class YouTubeVideoBlocker {
     ) {
       selectors.push(
         "ytd-horizontal-card-list-renderer",
-        "ytd-shelf-renderer", // Will filter by title in isShortsOrIrrelevantElement
+        "ytd-shelf-renderer" // Will filter by title in isShortsOrIrrelevantElement
       );
     }
 
@@ -1439,7 +1558,7 @@ class YouTubeVideoBlocker {
       richSections.forEach((section) => {
         if (
           section.querySelector(
-            'a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost',
+            'a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost'
           )
         ) {
           elements.push(section);
@@ -1494,17 +1613,16 @@ class YouTubeVideoBlocker {
         return;
       }
     }
-    // For Shorts: Home/Subscriptions page Shorts sections
-    else if (
-      this.removeShorts &&
-      (element.matches("ytd-rich-section-renderer") || element.closest("ytd-rich-section-renderer"))
-    ) {
+    // For Shorts/Irrelevant: Home/Subscriptions page sections
+    else if (element.matches("ytd-rich-section-renderer") || element.closest("ytd-rich-section-renderer")) {
       const richSection = element.closest("ytd-rich-section-renderer") || element;
-      if (
+      const isShorts =
+        this.removeShorts &&
         richSection.querySelector(
-          'a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost',
-        )
-      ) {
+          'a[href*="/shorts/"], ytd-reel-item-renderer, [data-shorts-shelf], grid-shelf-view-model.ytGridShelfViewModelHost'
+        );
+      const isShowMore = this.removeIrrelevantElements && this.isShowMoreSection(richSection);
+      if (isShorts || isShowMore) {
         elementToRemove = richSection;
       } else {
         return;
@@ -1573,7 +1691,7 @@ class YouTubeVideoBlocker {
       if (
         titleElement &&
         titleElement.textContent.match(
-          /People also search for|Previously watched|Channels new to you|From related searches/i,
+          /People also search for|Previously watched|Channels new to you|From related searches/i
         )
       ) {
         elementToRemove = element;
@@ -1581,6 +1699,7 @@ class YouTubeVideoBlocker {
         return;
       }
     }
+
     // Don't remove large containers
     else if (element.matches("ytd-search, ytd-page-manager, ytd-guide-section-renderer")) {
       logDebug("YouTube Video Blocker: Skipping removal of large container:", element.tagName);
@@ -1588,6 +1707,7 @@ class YouTubeVideoBlocker {
     }
 
     if (elementToRemove && elementToRemove.parentNode && elementToRemove !== document.body) {
+      elementToRemove.dataset.blockerShortRemoved = "true";
       logDebug("YouTube Video Blocker: Removing element:", elementToRemove.tagName, elementToRemove.className);
       elementToRemove.remove();
     }
@@ -1611,7 +1731,7 @@ class YouTubeVideoBlocker {
     // Also remove Shorts navigation link specifically
     if (this.removeShorts) {
       const shortsNavLinks = document.querySelectorAll(
-        'ytd-guide-entry-renderer a[title*="Shorts"], ytd-guide-entry-renderer[title*="Shorts"]',
+        'ytd-guide-entry-renderer a[title*="Shorts"], ytd-guide-entry-renderer[title*="Shorts"]'
       );
       shortsNavLinks.forEach((link) => {
         const parentEntry = link.closest("ytd-guide-entry-renderer");
@@ -1630,7 +1750,7 @@ class YouTubeVideoBlocker {
     const blockedPlaceholders = document.querySelectorAll(".youtube-video-blocked");
     const hasRemovedVideos =
       document.querySelectorAll(
-        'yt-lockup-view-model[data-blocker-processed="blocked"], ytd-video-renderer[data-blocker-processed="blocked"], ytd-compact-video-renderer[data-blocker-processed="blocked"]',
+        'yt-lockup-view-model[data-blocker-processed="blocked"], ytd-video-renderer[data-blocker-processed="blocked"], ytd-compact-video-renderer[data-blocker-processed="blocked"]'
       ).length > 0;
 
     logDebug("YouTube Video Blocker: Found", blockedPlaceholders.length, "placeholders");
@@ -1668,7 +1788,7 @@ class YouTubeVideoBlocker {
           } else {
             // Fallback to a valid container
             const fallbackParent = document.querySelector(
-              "#related, ytd-watch-next-secondary-results-renderer, #items",
+              "#related, ytd-watch-next-secondary-results-renderer, #items"
             );
             if (fallbackParent) {
               fallbackParent.appendChild(originalVideo);
@@ -1681,10 +1801,10 @@ class YouTubeVideoBlocker {
         }
       });
     } else if (!this.showPlaceholders && (this.rules.length > 0 || this.blockedVideoIds.length > 0)) {
-      // When placeholders are disabled and we have blocking rules, videos were likely removed
+      // When placeholders are disabled and there are blocking rules, videos were likely removed
       // The only way to restore them is to refresh the page content
       logDebug(
-        "YouTube Video Blocker: Placeholders disabled and blocking rules exist, refreshing page to restore removed videos",
+        "YouTube Video Blocker: Placeholders disabled and blocking rules exist, refreshing page to restore removed videos"
       );
       location.reload();
       return; // Exit early since page is reloading
@@ -1692,11 +1812,12 @@ class YouTubeVideoBlocker {
 
     // Reset processed markers on any remaining videos
     const videoElements = document.querySelectorAll(
-      "yt-lockup-view-model[data-blocker-processed], ytd-video-renderer[data-blocker-processed], ytd-compact-video-renderer[data-blocker-processed]",
+      "yt-lockup-view-model[data-blocker-processed], ytd-video-renderer[data-blocker-processed], ytd-compact-video-renderer[data-blocker-processed]"
     );
     logDebug("YouTube Video Blocker: Resetting", videoElements.length, "processed markers");
 
     videoElements.forEach((el) => {
+      this.disconnectPendingObserver(el);
       if (el.dataset.blockerProcessed === "blocked" || el.dataset.blockerProcessed === "checked") {
         delete el.dataset.blockerProcessed;
         el.style.display = "";
@@ -1714,15 +1835,12 @@ class YouTubeVideoBlocker {
       logDebug("YouTube Video Blocker: Removed temporary CSS");
     }
 
-    // Clear the unblocked video IDs since we're pausing the extension
+    // Clear the unblocked video IDs
     this.unblockedVideoIds.clear();
     logDebug("YouTube Video Blocker: Cleared unblocked video IDs");
   }
 
   stop() {
-    if (this.observer) {
-      this.observer.disconnect();
-    }
     if (this.parentObserver) {
       this.parentObserver.disconnect();
     }
@@ -1760,6 +1878,7 @@ new MutationObserver(() => {
     if (videoBlocker) {
       // Clear unblocked list on URL change
       videoBlocker.unblockedVideoIds.clear();
+      videoBlocker.clickbaitTitleCache.clear();
       logDebug("YouTube Video Blocker: URL changed, cleared unblocked list");
 
       if (currentUrl.includes("/watch")) {
@@ -1772,5 +1891,5 @@ new MutationObserver(() => {
   }
 }).observe(document, {
   subtree: true,
-  childList: true,
+  childList: true
 });

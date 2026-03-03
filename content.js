@@ -887,6 +887,7 @@ class YouTubeVideoBlocker {
     }
 
     let shouldBlock = false;
+    let blockReason = null;
 
     // Blocking clickbait / vague titles check
     if (this.blockClickbaitVaguetitles) {
@@ -897,6 +898,7 @@ class YouTubeVideoBlocker {
         const cached = this.clickbaitTitleCache.get(cacheKey);
         if (cached.blocked) {
           shouldBlock = true;
+          blockReason = "clickbait";
         }
       } else {
         // If not in cache, send the request
@@ -904,32 +906,41 @@ class YouTubeVideoBlocker {
         this.clickbaitTitleCache.set(cacheKey, result);
         if (result.blocked) {
           shouldBlock = true;
+          blockReason = "clickbait";
         }
       }
     }
 
     if (!shouldBlock) {
-      shouldBlock =
+      if (
         this.rules.some((rule) => {
           const trimmedRule = rule.trim();
           return trimmedRule && title.toLowerCase().includes(trimmedRule.toLowerCase());
-        }) ||
-        (videoId && this.blockedVideoIds.some((entry) => entry.id === videoId)) ||
-        (channelName &&
-          this.blockedChannelNames.some(
-            (blockedChannel) => blockedChannel.toLowerCase() === channelName.toLowerCase()
-          ));
+        })
+      ) {
+        shouldBlock = true;
+        blockReason = "keyword";
+      } else if (videoId && this.blockedVideoIds.some((entry) => entry.id === videoId)) {
+        shouldBlock = true;
+        blockReason = "video";
+      } else if (
+        channelName &&
+        this.blockedChannelNames.some((blockedChannel) => blockedChannel.toLowerCase() === channelName.toLowerCase())
+      ) {
+        shouldBlock = true;
+        blockReason = "channel";
+      }
     }
 
     if (shouldBlock) {
       logDebug(
-        `YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ""}${channelName ? `, Channel: ${channelName}` : ""}`
+        `YouTube Video Blocker: Blocking video with title: "${title}"${videoId ? `, ID: ${videoId}` : ""}${channelName ? `, Channel: ${channelName}` : ""} (reason: ${blockReason})`
       );
       if (!this.showPlaceholders) {
         this.hideVideoElement(videoElement);
         this.incrementBlockedCount();
       } else {
-        this.blockVideoWithPlaceholder(videoElement, title, "clickbait");
+        this.blockVideoWithPlaceholder(videoElement, title, blockReason);
       }
       videoElement.dataset.blockerProcessed = "blocked";
     } else {
@@ -1042,6 +1053,10 @@ class YouTubeVideoBlocker {
     } else if (blockReason === "clickbait") {
       messageDiv.textContent = "🚫 Blocked: Clickbait / Vague Title";
       messageDiv.style.color = "#ff6b6b";
+    } else if (blockReason === "keyword") {
+      messageDiv.textContent = "🚫 Blocked: Keyword Match";
+    } else if (blockReason === "video") {
+      messageDiv.textContent = "🚫 Blocked: Video ID";
     } else {
       messageDiv.textContent = "🚫 Video Blocked";
     }
